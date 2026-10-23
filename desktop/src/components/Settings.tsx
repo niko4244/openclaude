@@ -455,7 +455,7 @@ function Extensions({ toast }: { toast: (m: string) => void }) {
             <span className="name">{pick.preview.display_name}</span>
             <span className="badge">v{pick.preview.version}</span>
             <span className="badge">{pick.preview.server_type}</span>
-            <span className={`badge ${pick.preview.signature === "unsigned" ? "" : "local"}`}>{pick.preview.signature}</span>
+            <span className={`badge ${pick.preview.signature.startsWith("verified") ? "local" : ""}`} style={pick.preview.signature.startsWith("INVALID") ? { color: "var(--err)", borderColor: "var(--err)" } : undefined}>{pick.preview.signature}</span>
           </div>
           <div className="muted" style={{ margin: "6px 0" }}>{pick.preview.description}{pick.preview.author ? ` · by ${pick.preview.author}` : ""}</div>
           {pick.preview.tools.length > 0 && <div className="tool-list">{pick.preview.tools.map((t) => <span key={t} className="badge">{t}</span>)}</div>}

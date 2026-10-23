@@ -12,6 +12,7 @@ mod knowledge;
 mod mcp;
 mod probe;
 mod shell;
+mod sigverify;
 mod state;
 mod tasks;
 

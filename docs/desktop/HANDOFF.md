@@ -42,19 +42,18 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Committed and verified:** T1–T9.
-  - Gate (as of `2a11349c` plus the browser and approvals wiring): Rust 63/63, E2E 32/32 including live browser tools, isolation 4/4.
-  - a11y left after that gate: dialog backdrop contrast and heading order. Both are fixed in the next commit and need re-verifying.
-- **In the latest commit, gate pending:**
-  - a11y fixes (inert background under dialogs, heading levels).
-  - Artifact Download (`artifact_save`).
-  - Quick Entry recents (`quick_entry_open` plus the `open-chat` event).
+- **Pushed:** everything, including `.mcpb` signature verification, Read aloud, and the empty-reply retry.
+- **Gate:**
+  - Rust 65/65.
+  - Real-desktop E2E 35/35, including live browser tools, Quick Entry recents and artifact Download.
+  - a11y 0 violations.
+  - Isolation 4/4.
+- **Matrix:** 16 operational, 7 partial, 2 not planned.
 
 ## Next steps (in order)
-1. Rebuild, then run: E2E, a11y (must exit 0), isolation. Add E2E checks for Quick Entry recents and artifact Download (the dialog can't be driven; check that the button exists and the command rejects bad input).
-2. Update FEATURE_MATRIX rows to operational where evidence exists: 1, 11, 16 (approvals live-verified), 24 (built-in browser tools stand in for the extension). Then commit and push.
+1. Next: Cowork-style folder tasks (row 17). Tasks can target a granted folder and run the CLI agent there in the background (edits auto-accepted, commands auto-denied). Plus a hands-free voice mode (row 19).
 3. Remaining parity gaps:
-   - `.mcpb` signature verification and an extension directory.
+   - An extension directory (needs a hosted index; none exists for MCPB yet).
    - Artifact in-panel editing.
    - Visual side-by-side baselines (needs reference screenshots Nik can provide; don't drive the Claude window, since it hosts this session).
    - Publishing a signed release (`scripts/release.ps1 -Publish`) is outward-facing. Ask first.

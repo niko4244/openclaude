@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, Pencil, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Volume2, VolumeX, FileText, Pencil, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
 import { api } from "../api";
 import { textOf, type Message } from "../api";
 import type { Approval, LiveRun } from "../useChat";
@@ -73,6 +73,27 @@ function CopyBtn({ text }: { text: string }) {
   return (
     <button className="icon-btn" title="Copy" aria-label="Copy" onClick={async () => { await copyText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}>
       {done ? <Check size={15} /> : <Copy size={15} />}
+    </button>
+  );
+}
+
+/** Read a reply aloud with the OS speech voices (offline). Code blocks are skipped. */
+function ReadAloud({ text }: { text: string }) {
+  const [speaking, setSpeaking] = useState(false);
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
+  const toggle = () => {
+    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return; }
+    const plain = text.replace(/```[\s\S]*?```/g, " (code block) ").replace(/[*_#>`]/g, "");
+    const u = new SpeechSynthesisUtterance(plain);
+    u.onend = () => setSpeaking(false);
+    u.onerror = () => setSpeaking(false);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+    setSpeaking(true);
+  };
+  return (
+    <button className={`icon-btn ${speaking ? "on" : ""}`} title={speaking ? "Stop reading" : "Read aloud"} aria-label={speaking ? "Stop reading" : "Read aloud"} onClick={toggle}>
+      {speaking ? <VolumeX size={15} /> : <Volume2 size={15} />}
     </button>
   );
 }
@@ -222,6 +243,7 @@ export function ChatView({
               <div className="msg-actions always">
                 {!busy && <BranchNav m={m} onSwitch={onSwitchBranch} />}
                 {text && <CopyBtn text={text} />}
+                {text && <ReadAloud text={text} />}
                 <Feedback id={m.id} />
                 {i === lastAssistantIdx && !busy && <RetryMenu models={retryModels} onRetry={(model) => onRegenerate(regenFrom, model)} />}
                 <Meta m={m} />

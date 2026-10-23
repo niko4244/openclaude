@@ -261,6 +261,7 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
     let system = system_prompt(state, cid, &query);
     let gateway = state.gateway.read().await.clone();
 
+    let mut retried_empty = false;
     for _step in 0..MAX_STEPS {
         let history = state.db.lock().unwrap().messages(cid)?;
         let budget = model_meta.as_ref().and_then(|m| m.max_input_tokens).map(|t| t as usize * 3 / 4).unwrap_or(DEFAULT_BUDGET_TOKENS);
@@ -301,6 +302,12 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
                 return Ok(false);
             }
         };
+        // Some local models occasionally end a turn with nothing visible (all hidden
+        // reasoning). Retry such a turn once instead of showing an empty reply.
+        if !comp.cancelled && comp.content.trim().is_empty() && comp.tool_calls.is_empty() && !retried_empty {
+            retried_empty = true;
+            continue;
+        }
         msg.content = Value::String(comp.content.clone());
         msg.reasoning = Some(comp.reasoning.clone()).filter(|r| !r.is_empty());
         msg.model_served = comp.served_model.clone();

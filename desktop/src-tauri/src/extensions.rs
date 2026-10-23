@@ -49,11 +49,7 @@ pub fn read_manifest(bundle: &Path) -> anyhow::Result<(Value, Preview)> {
         anyhow::bail!("bundle is larger than 200 MB");
     }
     let bytes = std::fs::read(bundle)?;
-    let signature = if bytes.windows(b"MCPB_SIG_V1".len()).any(|w| w == b"MCPB_SIG_V1") || bytes.windows(11).any(|w| w == b"DXT_SIG_V1\0") {
-        "signed (signature present, not verified)".to_string()
-    } else {
-        "unsigned".to_string()
-    };
+    let signature = crate::sigverify::verify(&bytes).label();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
     let mut text = String::new();
     zip.by_name("manifest.json").map_err(|_| anyhow::anyhow!("manifest.json not found in bundle"))?.read_to_string(&mut text)?;
@@ -132,6 +128,10 @@ fn substitute(v: &str, dir: &Path, cfg: &HashMap<String, String>) -> String {
 /// Install `bundle` under `ext_root/<name>` and return the MCP server entry to register.
 pub fn install(bundle: &Path, ext_root: &Path, values: &BTreeMap<String, String>) -> anyhow::Result<(String, ServerConfig)> {
     let (m, preview) = read_manifest(bundle)?;
+    // A signature that doesn't match the content means the bundle was altered after signing.
+    if preview.signature.starts_with("INVALID") {
+        anyhow::bail!("refusing to install: {}", preview.signature);
+    }
     for f in &preview.user_config {
         if f.required && values.get(&f.key).is_none_or(|v| v.trim().is_empty()) && f.default.is_none() {
             anyhow::bail!("`{}` is required", f.title);

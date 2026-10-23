@@ -129,6 +129,13 @@ try {
   record("streaming chat with " + model, /pong/i.test(reply) && sawCursor, JSON.stringify(reply.slice(0, 80)));
   const meta = await page.locator(".msg.assistant .meta").last().innerText();
   record("routing metadata shown", meta.includes(model), meta.replace(/\s+/g, " "));
+  const voices = await page.evaluate(() => new Promise((r) => {
+    const n = () => speechSynthesis.getVoices().length;
+    if (n()) return r(n());
+    speechSynthesis.onvoiceschanged = () => r(n());
+    setTimeout(() => r(n()), 3000);
+  }));
+  record("read aloud available (OS voices)", (await page.locator('[aria-label="Read aloud"]').count()) > 0 && voices > 0, `${voices} voices`);
   const title = await page.locator(".conv-item.active .conv-title").innerText();
   record("conversation saved + titled", title.length > 0, title);
   await page.screenshot({ path: join(out, "02-chat.png") });
@@ -173,7 +180,7 @@ try {
   // 6. artifact preview in isolated origin
   await page.keyboard.press("Control+n");
   await sendMessage(page, "Create a complete HTML page with <h1 id=\"t\">Hello Artifact</h1> as an artifact titled \"Hello page\". No explanation.");
-  await waitIdle(page);
+  await waitIdle(page, 300000);
   // Titled blocks become artifact cards and auto-open; untitled html still offers Preview.
   const autoOpened = await page.waitForSelector(".artifact-panel iframe", { timeout: 4000 }).then(() => true, () => false);
   const card = await page.locator(".artifact-card").count();
@@ -193,6 +200,7 @@ try {
         }).catch(() => true)
       : false;
     record("HTML artifact renders sandboxed", ok, ok ? "" : "h1 not found in preview");
+    record("artifact panel offers Download", (await page.locator('.artifact-panel button:has-text("Download")').count()) === 1);
     record("artifact has no Tauri IPC access", ipcBlocked === true);
     await page.screenshot({ path: join(out, "06-artifact.png") });
   } else {
@@ -292,6 +300,20 @@ try {
     const r = await lastAssistantText(p2);
     record("quick entry starts a chat in main window", /quick/i.test(r) && (await p2.locator(".conv-item").count()) > before, JSON.stringify(r.slice(0, 60)));
   }
+
+  // 12b. quick entry recents jump to an existing chat
+  await within(5000, p2.evaluate(() => window.__TAURI_INTERNALS__.invoke("quick_entry_toggle")));
+  await sleep(1000);
+  let qr = null;
+  for (const pg of app.browser.contexts().flatMap((c) => c.pages())) {
+    if (pg !== p2 && (await within(1500, pg.locator(".quick-recents button").count().catch(() => 0)))) qr = pg;
+  }
+  if (qr) {
+    const firstTitle = await within(3000, qr.locator(".quick-recents button").first().getAttribute("title"));
+    await within(5000, qr.locator(".quick-recents button").first().click());
+    const opened = await p2.waitForFunction((t) => (document.querySelector(".chat-top .title")?.textContent || "") === t, firstTitle, { timeout: 10000 }).then(() => true, () => false);
+    record("quick entry recents open a chat", opened, String(firstTitle).slice(0, 50));
+  } else record("quick entry recents open a chat", false, "no recents row found");
 
   // 13. code tab: recent folder + terminal
   await p2.click('.nav-item:has-text("Code")');

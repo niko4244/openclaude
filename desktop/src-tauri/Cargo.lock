@@ -3562,6 +3562,7 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "uuid",
+ "windows 0.61.3",
  "xcap",
  "zip 2.6.1",
 ]
