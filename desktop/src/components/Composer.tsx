@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ArrowUp, FileText, Plus, Square } from "lucide-react";
 import { api, type Attachment, type AttachmentResult, type ContentPart } from "../api";
 import { VoiceButton } from "./VoiceButton";
+import { voiceMode } from "../voiceMode";
 
 export function buildContent(text: string, atts: Attachment[]): string | ContentPart[] {
   if (!atts.length) return text;
@@ -129,7 +130,15 @@ export function Composer({
           <Plus size={17} strokeWidth={1.75} />
         </button>
         {toolsSlot}
-        <VoiceButton onText={(t) => { setText((x) => (x ? x + " " : "") + t); ta.current?.focus(); }} onError={onError} />
+        <VoiceButton
+          onText={(t) => {
+            // Voice conversation: send the dictation straight away.
+            if (voiceMode.get() && !busy && t.trim()) { onSend(t.trim(), []); return; }
+            setText((x) => (x ? x + " " : "") + t);
+            ta.current?.focus();
+          }}
+          onError={onError}
+        />
         <span className="spacer" />
         {modelSlot}
         {busy ? (

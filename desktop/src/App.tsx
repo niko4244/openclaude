@@ -20,6 +20,7 @@ import { Logo } from "./components/Logo";
 import { extractArtifacts, type Artifact } from "./components/Markdown";
 
 import { useChat } from "./useChat";
+import { speak, voiceMode } from "./voiceMode";
 
 const STARTERS: { icon: typeof PenLine; label: string; prompt: string }[] = [
   { icon: PenLine, label: "Write", prompt: "Help me write " },
@@ -124,6 +125,7 @@ export default function App() {
       const last = [...chat.messages].reverse().find((m) => m.role === "assistant");
       const arts = last ? extractArtifacts(textOf(last.content)) : [];
       if (arts.length) setArtifact(arts[arts.length - 1]);
+      if (last && voiceMode.get()) speak(textOf(last.content));
     }
     wasBusy.current = chat.busy;
   }, [chat.busy, chat.messages]);

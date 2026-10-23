@@ -140,6 +140,19 @@ try {
   record("conversation saved + titled", title.length > 0, title);
   await page.screenshot({ path: join(out, "02-chat.png") });
 
+  // 2b. voice conversation: replies are spoken (speech engine stubbed so the test is silent)
+  await page.evaluate(() => { window.__spoken = []; speechSynthesis.speak = (u) => window.__spoken.push(u.text); });
+  await page.click('[aria-label="Search and tools"]');
+  await page.locator('.tool-row:has-text("Voice conversation") input').check();
+  await page.click('[aria-label="Search and tools"]');
+  await sendMessage(page, "Reply with exactly one word: spoken");
+  await waitIdle(page);
+  const spoken = await page.waitForFunction(() => window.__spoken.length > 0 && window.__spoken.join(" "), null, { timeout: 10000 }).then((h) => h.jsonValue(), () => "");
+  record("voice conversation reads replies aloud", /spoken/i.test(String(spoken)), JSON.stringify(String(spoken).slice(0, 60)));
+  await page.click('[aria-label="Search and tools"]');
+  await page.locator('.tool-row:has-text("Voice conversation") input').uncheck();
+  await page.click('[aria-label="Search and tools"]');
+
   // 3. MCP connector via Settings UI
   await page.keyboard.press("Control+,");
   await page.click('button[role="tab"]:has-text("Connectors")');

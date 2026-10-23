@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Brain, Plug, SlidersHorizontal } from "lucide-react";
+import { AudioLines, Brain, Plug, SlidersHorizontal } from "lucide-react";
+import { voiceMode } from "../voiceMode";
 import { api, type ServerStatus } from "../api";
 
 /** Composer tools popover: per-connector on/off and extended thinking. Both are persisted preferences. */
@@ -8,6 +9,7 @@ export function ToolsMenu({ onManage }: { onManage: () => void }) {
   const [servers, setServers] = useState<ServerStatus[]>([]);
   const [disabled, setDisabled] = useState<string[]>([]);
   const [thinking, setThinking] = useState(false);
+  const [voice, setVoice] = useState(voiceMode.get());
   const ref = useRef<HTMLDivElement>(null);
 
   const load = async () => {
@@ -43,6 +45,11 @@ export function ToolsMenu({ onManage }: { onManage: () => void }) {
             <Brain size={16} />
             <span className="grow">Extended thinking<span className="sub">Asks the model for deeper reasoning (reasoning_effort=high). Models without support may reject it.</span></span>
             <input type="checkbox" role="switch" checked={thinking} onChange={async (e) => { setThinking(e.target.checked); await api.setSetting("extended_thinking", String(e.target.checked)); }} />
+          </label>
+          <label className="tool-row">
+            <AudioLines size={16} />
+            <span className="grow">Voice conversation<span className="sub">Dictation is sent immediately and replies are read aloud.</span></span>
+            <input type="checkbox" role="switch" checked={voice} onChange={(e) => { setVoice(e.target.checked); voiceMode.set(e.target.checked); }} />
           </label>
           <div className="picker-group">Connectors</div>
           {servers.map((s) => (
