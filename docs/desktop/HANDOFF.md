@@ -42,41 +42,25 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Release:** `desktop-v0.1.0` published (approved by Nik). The updater feed returns 200.
-- **Committed and pushed:** `f76dd670` (Chrome extension, RGB vision probe, visual baselines doc).
-- **Chrome extension E2E:** 4/4 pass.
-- **Computer-use E2E** (`e2e/computer-use.e2e.mjs`, `gemma4-local`):
-  - The screenshot was approved and ran; no permanent allow was stored.
-  - The final reply was HTTP 408 from LiteLLM. A direct replay of the same 1366x768 PNG (739 KB base64) took 148 s and returned empty content.
-  - Fix in progress: smaller screenshots (JPEG, lower max side).
-- **Nik's latest requests (in progress):**
-  1. Port all Claude plugins.
-  2. Include Ponytail (`DietrichGebert/ponytail`, MIT; Claude marketplace + plugin).
-  3. Install Claude plugin repos natively from GitHub.
-  4. Auto-update installed plugins as soon as GitHub has updates.
-- **Plugin design (`src-tauri/src/plugins.rs`, being written):**
-  - Registry at `<data>/plugins/registry.json`.
-  - Git sources: depth-1 clone (sparse for subdirs) into `<data>/plugins/repos/`.
-  - Local sources: read in place (Claude Desktop `%APPDATA%/Claude/rpm/*/*/plugin_<id>`, CLI installs, `~/.claude`, `~/.openclaude` user folders).
-  - Marketplace JSON is read from `raw.githubusercontent.com/<repo>/HEAD/.claude-plugin/marketplace.json`.
-  - Supported source forms: `./sub`, `{source: github|url|git-subdir}`.
-  - Desktop `marketplaceName` mapping:
-    - `knowledge-work-plugins` resolves to `anthropics/knowledge-work-plugins`.
-    - `anthropic-plugin-directory` tries `anthropics/claude-plugins-official`, then the knowledge-work repo, then the `repository` field in plugin.json, then a local reference.
-  - Components:
-    - `skills/*/SKILL.md`, `commands/**/*.md` (`$ARGUMENTS`), `agents/*.md`. Named `plugin:name`; user folders use bare names.
-    - Plugin `.mcp.json` entries go to mcp.json, disabled by default.
-    - SessionStart/UserPromptSubmit `command` hooks run through Git Bash with CLAUDE_PLUGIN_ROOT and an isolated CLAUDE_CONFIG_DIR. Their stdout or `additionalContext` is added to the system prompt.
-  - Chat tools: `skills__search` / `skills__load`; the composer gets a "/" menu.
-  - Auto-update: `git ls-remote` every 15 min; fetch + reset; prev sha kept for rollback; notify only when the plugin subdir tree changed.
-  - First run seeds Ponytail and imports Claude plugins, except when `OPENCLAUDE_DATA_DIR` is set (tests).
-- **Nik's plugins:**
-  - CLI: claude-mem, claude-smart (local npx dir), i-have-adhd.
-  - Desktop: design, data, engineering, brand-voice, cowork-plugin-management (knowledge-work); superdesign, gitkraken, github, superpowers, desktop-commander (official); hive, pdf-viewer (local only); claude-review-loop, remotion (their own GitHub repos).
-- **Last full gate:** E2E 38/38, a11y 0, Rust 71.
+- **Release:** `desktop-v0.1.0` published; the updater feed serves it.
+- **Plugin system shipped:** commit `fca5dac4` (matrix row 26, tranche T10). Code is in `src-tauri/src/plugins.rs`.
+  - Install from GitHub: marketplace.json or a plugin repo. Sparse shallow clones go to `<data>/plugins/repos/`.
+  - Auto-update every 15 min. Rollback pins the plugin.
+  - Import: the user's Claude Code and Claude Desktop plugins (GitHub source when known), plus `~/.claude` and `~/.openclaude` as user folders.
+  - Ponytail is featured, and the first run seeds it plus the import (skipped when `OPENCLAUDE_DATA_DIR` is set, unless `OPENCLAUDE_PLUGIN_SEED=1`).
+  - Chat gets `skills__search`/`skills__load`, a composer "/" menu, and SessionStart/UserPromptSubmit hook context. Hooks run through Git Bash with an isolated `CLAUDE_CONFIG_DIR` at `<data>/plugins/claude-config`.
+  - Plugin `.mcp.json` entries become connectors: remote ones and those needing `${VAR}` start disabled.
+  - Code tab and folder tasks pass `--plugin-dir` for enabled plugins, skipping ones the CLI already loads from `~/.claude`.
+  - Evidence: plugins E2E 11/11 (19 of Nik's plugins found, 16 installed from GitHub, 752 components indexed); 9 unit tests.
+- **Computer use:** the screenshot path is verified live. The vision reply timed out (HTTP 408); a direct replay ran at 2.7 tok/s with the GPU at 15.6/16.3 GB, so it is a local-throughput limit, not an app defect. Re-run `e2e/computer-use.e2e.mjs` when the GPU is free.
+- **Gate running:** rebuild + desktop E2E + a11y + full Rust suite. Previous gate: E2E 38/38, a11y 0.
 
 ## Next steps (in order)
-1. Finish `plugins.rs` and its lib.rs commands, the chat.rs hook/skill wiring, the Settings "Plugins" tab and the Composer "/" menu. Add tests and `e2e/plugins.e2e.mjs`.
-2. Smaller computer-use screenshots, then re-run `e2e/computer-use.e2e.mjs`.
-3. Full gate (rust tests, build, desktop/a11y E2E), update FEATURE_MATRIX/GOAL, commit and push.
-4. Remaining gaps: artifact in-panel editing; Code tab plugin support (CLI-side); non-context hooks (PreToolUse/PostToolUse/Stop) are not ported.
+1. Finish the gate. Fix any regression (new Settings tab, composer "/" menu, chat hooks). Commit the docs (matrix 18/20/26, GOAL T10, this file) and push.
+2. Nik's real profile gets the plugins on first launch of the next build (seed). Publishing a new release is outward-facing: ask first.
+3. Remaining gaps:
+   - Artifact in-panel editing.
+   - Chat does not run PreToolUse/PostToolUse/Stop hooks (the CLI does in the Code tab).
+   - npm/pip plugin sources.
+   - Pixel-level visual baselines (needs reference screenshots).
+   - Computer-use vision reply on a faster model or free GPU.

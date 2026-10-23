@@ -23,6 +23,7 @@ update, and a commit pushed to the PR branch. No check-ins between tranches. Nik
 | T7 | Tasks/Cowork-lite: background task runner, folder grants, scheduled runs, task history, approvals inbox | 17 | ✅ scheduled and background tasks; ⏳ Cowork-style spaces |
 | T8 | Release: auto-update (Tauri updater, signed manifests on the fork's releases), code signing hook, perf budget (cold start under 3 s, idle memory), accessibility pass | 20 + release | ✅ signed updater + release script, deep links, window state; ⏳ first published release, code signing |
 | T9 | Stretch: voice (local STT through the gateway or Whisper), computer use (approval-gated), deep links, remote MCP OAuth | 8, 18, 19, 23 | ✅ deep links (E2E); ✅ MCP OAuth + SSE (mock-verified); ✅ computer use + dictation implemented (unit/mock-verified; live E2E needs a vision model and a mic) |
+| T10 | Plugins: Claude-format plugins from GitHub with auto-update, import of the user's Claude plugins, Ponytail, `/` menu, skills tools, context hooks, plugin connectors, CLI plugin dirs | 26 | ✅ Evidence: e2e/plugins.e2e.mjs 11/11 (Ponytail installed from GitHub with its session hook feeding chat context; 19 of Nik's Claude Code/Desktop plugins found and imported, 16 installed from GitHub; 752 skills/commands/agents indexed; update check; '/' menu send; the model finds a skill via skills__search on its own); 9 unit tests incl. real git install/update/rollback and real hooks; CLI --plugin-dir load verified. |
 
 ## Reference baseline
 
