@@ -24,7 +24,7 @@ export function SearchPalette({ onOpen, onClose }: { onOpen: (id: string) => voi
   }, [q]);
   return (
     <div className="palette-backdrop" onClick={onClose}>
-      <div className="palette" role="dialog" aria-label="Search chats" onClick={(e) => e.stopPropagation()}>
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Search chats" onClick={(e) => e.stopPropagation()}>
         <div className="palette-input"><Search size={16} className="muted" />
           <input ref={input} value={q} placeholder="Search chats…" aria-label="Search chats" onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -57,7 +57,7 @@ export function ChatsPage({ onOpen, onNew }: { onOpen: (id: string) => void; onN
   return (
     <div className="page">
       <div className="page-inner">
-        <div className="page-head"><h2>Your chat history</h2><span className="spacer" /><button className="btn primary" onClick={onNew}><Plus size={15} /> New chat</button></div>
+        <div className="page-head"><h1>Your chat history</h1><span className="spacer" /><button className="btn primary" onClick={onNew}><Plus size={15} /> New chat</button></div>
         <div className="page-search"><Search size={16} className="muted" /><input value={q} placeholder="Search your chats…" aria-label="Search your chats" onChange={(e) => setQ(e.target.value)} /></div>
         <div className="muted" style={{ margin: "10px 2px" }}>{rows.length} chat{rows.length === 1 ? "" : "s"}{q ? ` matching “${q}”` : ""}</div>
         <div className="list">
@@ -77,7 +77,7 @@ export function ProjectsPage({ projects, onOpen, onCreate }: { projects: Project
   return (
     <div className="page">
       <div className="page-inner">
-        <div className="page-head"><h2>Projects</h2><span className="spacer" /><button className="btn primary" onClick={onCreate}><Plus size={15} /> New project</button></div>
+        <div className="page-head"><h1>Projects</h1><span className="spacer" /><button className="btn primary" onClick={onCreate}><Plus size={15} /> New project</button></div>
         <p className="muted">Projects keep related chats together, with shared instructions and a default model.</p>
         <div className="grid">
           {projects.map((p) => (
@@ -104,7 +104,7 @@ export function ProjectKnowledge({ projectId, toast }: { projectId: string; toas
     <div className="card knowledge">
       <div className="card-head">
         <span className="name">Project knowledge</span>
-        <span className="muted">{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} · ${Math.round(chars / 1000)}K chars · ${chars <= 60000 ? "all in context" : "relevant excerpts per message"}` : "none yet"}</span>
+        <span className="muted">{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} · ${chars < 1000 ? `${chars} chars` : `${Math.round(chars / 1000)}K chars`} · ${chars <= 60000 ? "all in context" : "relevant excerpts per message"}` : "none yet"}</span>
         <span className="spacer" />
         <button className="btn" onClick={async () => { const errs = await api.projectAddFiles(projectId); errs.forEach(toast); await load(); }}><Plus size={14} /> Add files</button>
       </div>

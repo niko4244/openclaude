@@ -48,7 +48,7 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
   return (
     <div className="page">
       <div className="page-inner">
-        <div className="page-head"><h2>Tasks</h2><span className="spacer" /><button className="btn primary" onClick={() => open(blank(defaultModel))}><Plus size={15} /> New task</button></div>
+        <div className="page-head"><h1>Tasks</h1><span className="spacer" /><button className="btn primary" onClick={() => open(blank(defaultModel))}><Plus size={15} /> New task</button></div>
         <p className="muted">Saved prompts that run on demand or on a schedule. Each run becomes a chat you can open and continue. Tasks run while OpenClaude is running (it stays in the tray when closed). Background runs can only use tools set to “Always allow”.</p>
         {edit && (
           <div className="card">

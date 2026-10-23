@@ -319,6 +319,8 @@ export default function App() {
         onSearch={() => setSearchOpen(true)}
       />
       <main className="main">
+        {page === "chat" && activeId && <h1 className="sr-only">{active?.title || "Chat"}</h1>}
+        {page === "code" && <h1 className="sr-only">Code workspace</h1>}
         {page === "chat" && activeId && (
           <div className="topbar chat-top">
             <span className="spacer" />

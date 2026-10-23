@@ -52,7 +52,7 @@ export function Settings({
   return (
     <div className="settings">
       <div className="settings-inner">
-        <div className="page-head"><h2>Settings</h2><span className="spacer" /><button className="btn" onClick={onClose}>Done</button></div>
+        <div className="page-head"><h1>Settings</h1><span className="spacer" /><button className="btn" onClick={onClose}>Done</button></div>
         <div className="settings-layout">
         <div className="settings-tabs" role="tablist" aria-orientation="vertical">
           {TABS.map(([t, l]) => (
@@ -217,7 +217,7 @@ function Models({ models, onRefresh }: { models: ModelEntry[]; onRefresh: () => 
       <div style={{ overflowX: "auto", marginTop: 10 }}>
         <table className="models">
           <thead>
-            <tr><th>Alias</th><th>Where</th><th>Backend</th><th>Context</th><th>Tools (decl.)</th><th>Vision (decl.)</th><th title="Measured: chat · stream · system · tools · json · vision">Measured c/s/sys/t/j/v</th><th></th></tr>
+            <tr><th>Alias</th><th>Where</th><th>Backend</th><th>Context</th><th>Tools (decl.)</th><th>Vision (decl.)</th><th title="Measured: chat · stream · system · tools · json · vision">Measured c/s/sys/t/j/v</th><th><span className="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             {shown.map((m) => (
@@ -336,11 +336,11 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
       )}
 
       <h3>Add a connector</h3>
-      <div className="field"><label>Name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="filesystem" /></div>
-      <div className="field"><label>Command (stdio)</label><input value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} placeholder="npx" /></div>
-      <div className="field"><label>Arguments</label><input value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })} placeholder='-y @modelcontextprotocol/server-filesystem "C:\Users\me\Documents"' /></div>
-      <div className="field"><label>Environment (KEY=value per line)</label><textarea value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })} style={{ minHeight: 50 }} /></div>
-      <div className="field"><label>…or URL (Streamable HTTP)</label><input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://example.com/mcp" /></div>
+      <div className="field"><label>Name</label><input aria-label="Connector name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="filesystem" /></div>
+      <div className="field"><label>Command (stdio)</label><input aria-label="Command" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} placeholder="npx" /></div>
+      <div className="field"><label>Arguments</label><input aria-label="Arguments" value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })} placeholder='-y @modelcontextprotocol/server-filesystem "C:\Users\me\Documents"' /></div>
+      <div className="field"><label>Environment (KEY=value per line)</label><textarea aria-label="Environment variables" value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })} style={{ minHeight: 50 }} /></div>
+      <div className="field"><label>…or URL (Streamable HTTP or SSE)</label><input aria-label="Server URL" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://example.com/mcp" /></div>
       <button className="btn primary" disabled={!form.name.trim()} onClick={add}>Add connector</button>
       {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </>
@@ -384,11 +384,11 @@ function Projects({ projects, models, onChanged, toast }: { projects: Project[];
         </div>
       ))}
       <h3>{edit.id ? `Edit “${edit.name}”` : "New project"}</h3>
-      <div className="field"><label>Name</label><input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></div>
-      <div className="field"><label>Instructions</label><textarea value={edit.instructions} onChange={(e) => setEdit({ ...edit, instructions: e.target.value })} placeholder="Context and rules every chat in this project should follow." /></div>
+      <div className="field"><label>Name</label><input aria-label="Project name" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></div>
+      <div className="field"><label>Instructions</label><textarea aria-label="Project instructions" value={edit.instructions} onChange={(e) => setEdit({ ...edit, instructions: e.target.value })} placeholder="Context and rules every chat in this project should follow." /></div>
       <div className="field">
         <label>Default model</label>
-        <select value={edit.default_model || ""} onChange={(e) => setEdit({ ...edit, default_model: e.target.value || null })}>
+        <select aria-label="Default model" value={edit.default_model || ""} onChange={(e) => setEdit({ ...edit, default_model: e.target.value || null })}>
           <option value="">(use global default)</option>
           {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
         </select>

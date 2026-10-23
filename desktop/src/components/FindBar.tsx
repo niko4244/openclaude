@@ -78,7 +78,7 @@ export const SHORTCUTS: [string, string][] = [
 export function ShortcutsSheet({ onClose }: { onClose: () => void }) {
   return (
     <div className="palette-backdrop" onClick={onClose}>
-      <div className="palette sheet" role="dialog" aria-label="Keyboard shortcuts" onClick={(e) => e.stopPropagation()}>
+      <div className="palette sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={(e) => e.stopPropagation()}>
         <h3 style={{ marginTop: 0 }}>Keyboard shortcuts</h3>
         <table>
           <tbody>
