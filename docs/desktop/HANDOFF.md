@@ -53,11 +53,14 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Code tab and folder tasks pass `--plugin-dir` for enabled plugins, skipping ones the CLI already loads from `~/.claude`.
   - Evidence: plugins E2E 11/11 (19 of Nik's plugins found, 16 installed from GitHub, 752 components indexed); 9 unit tests.
 - **Computer use:** the screenshot path is verified live. The vision reply timed out (HTTP 408); a direct replay ran at 2.7 tok/s with the GPU at 15.6/16.3 GB, so it is a local-throughput limit, not an app defect. Re-run `e2e/computer-use.e2e.mjs` when the GPU is free.
-- **Gate running:** rebuild + desktop E2E + a11y + full Rust suite. Previous gate: E2E 38/38, a11y 0.
+- **Artifacts:** React component artifacts run live in the sandbox (Babel in-frame, import map to esm.sh, Tailwind), Mermaid renders, and select-to-ask offers Improve / Explain. Commit `14cbfebf`.
+- **Last full gate (`14cbfebf`):** desktop E2E 38/38, a11y 0, isolation 4/4, artifact-previews 4/4, plugins 11/11, Rust 80 (+9 live tests ignored). The voice E2E check flaked once on a model reply ("spåken") and passed on re-run.
+- **Matrix:** every row is Operational except 21 (sync) and 25 (Office/BLE), which are not planned.
+- **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
 ## Next steps (in order)
-1. Finish the gate. Fix any regression (new Settings tab, composer "/" menu, chat hooks). Commit the docs (matrix 18/20/26, GOAL T10, this file) and push.
-2. Nik's real profile gets the plugins on first launch of the next build (seed). Publishing a new release is outward-facing: ask first.
+1. Ask Nik before publishing `desktop-v0.2.0` (bump the version in tauri.conf.json/package.json/Cargo.toml, then `scripts/release.ps1 -Publish`). The installed v0.1.0 then auto-updates, and the first launch seeds Ponytail and imports his Claude plugins.
+2. Visual: compare against reference screenshots once Nik drops them into `docs/parity/reference/`.
 3. Remaining gaps:
    - Artifact in-panel editing.
    - Chat does not run PreToolUse/PostToolUse/Stop hooks (the CLI does in the Code tab).
