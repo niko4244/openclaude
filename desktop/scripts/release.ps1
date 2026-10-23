@@ -14,7 +14,10 @@ if (-not (Test-Path $keyPath)) { throw "Signing key not found at $keyPath" }
 $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $keyPath -Raw
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 
-.\scripts\with-msvc.ps1 npx tauri build --config '{\"bundle\":{\"createUpdaterArtifacts\":true}}'
+# Inline JSON args get mangled by PowerShell's native quoting; pass a config file instead.
+$releaseConf = Join-Path $env:TEMP "openclaude-release.conf.json"
+[IO.File]::WriteAllText($releaseConf, '{"bundle":{"createUpdaterArtifacts":true}}')
+.\scripts\with-msvc.ps1 npx tauri build --config $releaseConf
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 $version = (Get-Content src-tauri\tauri.conf.json | ConvertFrom-Json).version
@@ -28,10 +31,12 @@ $manifest = [ordered]@{
   platforms = @{ "windows-x86_64" = @{ signature = $sig.Trim(); url = "https://github.com/$Repo/releases/download/$tag/$($nsis.Name)" } }
 }
 $out = Join-Path $nsis.DirectoryName "latest.json"
-$manifest | ConvertTo-Json -Depth 5 | Set-Content $out -Encoding utf8
+# UTF-8 without BOM: the updater's JSON parser rejects a byte-order mark.
+[IO.File]::WriteAllText($out, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 Write-Host "Signed installer: $($nsis.FullName)"
 Write-Host "Updater manifest: $out"
 
 if ($Publish) {
-  gh release create $tag $nsis.FullName "$($nsis.FullName).sig" $out --repo $Repo --title "OpenClaude Desktop $version" --notes "Signed Windows build. The in-app updater reads latest.json from this release."
+  $sha = (git rev-parse HEAD).Trim()   # tag exactly the commit that was built
+  gh release create $tag $nsis.FullName "$($nsis.FullName).sig" $out --repo $Repo --target $sha --title "OpenClaude Desktop $version" --notes "Signed Windows build. The in-app updater reads latest.json from this release."
 }
