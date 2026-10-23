@@ -304,12 +304,13 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         };
         // Some local models occasionally end a turn with nothing visible (all hidden
         // reasoning). Retry such a turn once instead of showing an empty reply.
-        if !comp.cancelled && comp.content.trim().is_empty() && comp.tool_calls.is_empty() && !retried_empty {
+        if !comp.cancelled && comp.content.trim().is_empty() && comp.reasoning.trim().is_empty() && comp.tool_calls.is_empty() && !retried_empty {
             retried_empty = true;
             continue;
         }
-        msg.content = Value::String(comp.content.clone());
-        msg.reasoning = Some(comp.reasoning.clone()).filter(|r| !r.is_empty());
+        let (content, reasoning) = visible_reply(&comp.content, &comp.reasoning, !comp.tool_calls.is_empty() || comp.cancelled);
+        msg.content = Value::String(content);
+        msg.reasoning = reasoning;
         msg.model_served = comp.served_model.clone();
         msg.routed_host = comp.resolved_api_base.clone();
         msg.fallbacks = comp.attempted_fallbacks.clone().filter(|f| f != "0" && !f.is_empty());
@@ -356,6 +357,15 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
     }
     let _ = ch.send(ChatEvent::Error { message: format!("Stopped after {MAX_STEPS} tool steps.") });
     Ok(false)
+}
+
+/// Some local backends put a final answer in the reasoning channel (seen after tool
+/// results). A finished, tool-free turn with no visible text shows that text as the reply.
+pub fn visible_reply(content: &str, reasoning: &str, has_calls_or_cancelled: bool) -> (String, Option<String>) {
+    if content.trim().is_empty() && !reasoning.trim().is_empty() && !has_calls_or_cancelled {
+        return (reasoning.trim().to_string(), None);
+    }
+    (content.to_string(), Some(reasoning.to_string()).filter(|r| !r.is_empty()))
 }
 
 /// Tokens assumed available when the gateway does not declare a context window.
@@ -582,6 +592,14 @@ mod tests {
         assert_eq!(w[2]["content"], "shot", "tool message carries text only");
         let last = w.last().unwrap().to_string();
         assert!(last.contains("data:new") && !last.contains("data:old"));
+    }
+
+    #[test]
+    fn answer_in_reasoning_channel_becomes_visible() {
+        assert_eq!(visible_reply("", "The marker is X.", false), ("The marker is X.".into(), None));
+        assert_eq!(visible_reply("Hi", "thinking", false), ("Hi".into(), Some("thinking".into())));
+        // a turn that is calling tools keeps its reasoning private
+        assert_eq!(visible_reply("", "I'll call a tool", true), (String::new(), Some("I'll call a tool".into())));
     }
 
     #[test]
