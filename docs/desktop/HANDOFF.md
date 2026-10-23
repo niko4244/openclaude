@@ -42,23 +42,23 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Pushed:** `d24f6e42`.
-  - Connector directory (official MCP Registry), voice conversation mode, folder tasks.
-  - Answers emitted in the reasoning channel are now shown as the reply.
-- **Last full gate:**
-  - E2E 37/38. The browser check showed an empty reply, caused by the reasoning-channel bug that `d24f6e42` fixes.
-  - a11y 0.
-  - Rust 68.
-- **Running:** confirming gate on `d24f6e42`.
-- **Matrix:** 20 operational, 3 partial (18 computer-use live, 20 release, 24 Chrome extension), 2 not planned (21 sync, 25 Office/BLE).
-- **Waiting on Nik:**
-  - Publish a release?
-  - A vision model on the gateway?
-  - Reference screenshots for visual diffing?
-  - Build a Chrome extension or sync?
+- **Release:** `desktop-v0.1.0` published (approved by Nik): https://github.com/niko4244/openclaude/releases/tag/desktop-v0.1.0. The updater feed returns 200.
+- **Nik's decisions:**
+  - Publish: done.
+  - Vision model: pulled `qwen2.5vl:7b` (vision but no tools in Ollama). `gemma4-local` → `gemma4-12b-64k` already has vision and tools.
+  - Visual reference: "you figure it out".
+  - Build the Chrome extension: in progress.
+- **Chrome extension (uncommitted until its E2E passes):**
+  - `desktop/chrome-extension/` (MV3), `src-tauri/src/chrome_bridge.rs` (token + `chrome-extension://` origin on `127.0.0.1:48751`), chat.rs `chrome__*` tools (approval-gated, never background or "always"), and a Settings panel.
+  - Rust 71/71.
+  - `e2e/chrome-extension.e2e.mjs` failed on a non-optimistic toggle. Fixed; re-run pending.
+- **Vision:** the probe's 8×8 1-bit palette PNG is rejected by Ollama ("Failed to load image"). Switching to an RGB PNG, then re-probing `gemma4-local`. If vision works, run live computer use (screenshot only).
+- **Last full gate:** E2E 38/38, a11y 0.
 
 ## Next steps (in order)
-1. Remaining partials:
+1. After the Chrome E2E and vision probe pass:
+   - Commit, then work on visual reference (Nik said figure it out): compare against Anthropic's public Claude Desktop screenshots (help center), layout only, never brand colors.
+2. Remaining partials:
    - Row 9: no public extension directory exists.
    - Row 18: computer use needs a vision model on the gateway.
    - Row 20: a published release; ask Nik first.
