@@ -1,11 +1,14 @@
 mod agent;
 mod chat;
 mod db;
+mod extensions;
 mod gateway;
+mod knowledge;
 mod mcp;
 mod probe;
 mod shell;
 mod state;
+mod tasks;
 
 use chat::{ChatEvent, Run, SendArgs};
 use db::{Conversation, Db, Message, Project};
@@ -161,6 +164,39 @@ fn save_project(state: State<'_, Arc<AppState>>, mut project: Project) -> Res<Pr
 }
 
 #[tauri::command]
+fn project_files(state: State<'_, Arc<AppState>>, project_id: String) -> Res<Vec<db::ProjectFile>> {
+    state.db.lock().unwrap().project_files(&project_id).map_err(e)
+}
+
+/// Native picker -> text extraction -> stored with the project. Binary files are rejected.
+#[tauri::command]
+async fn project_add_files(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, project_id: String) -> Res<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_files(move |f| {
+        let _ = tx.send(f);
+    });
+    let Ok(Some(files)) = rx.await else { return Ok(vec![]) };
+    let mut errors = vec![];
+    for f in files {
+        let Ok(path) = f.into_path() else { continue };
+        match read_attachment(&path) {
+            Ok(a) if a.kind == "text" => {
+                state.db.lock().unwrap().add_project_file(&project_id, &a.name, a.text.as_deref().unwrap_or(""), a.size as i64).map_err(e)?
+            }
+            Ok(a) => errors.push(format!("{}: only text files can be project knowledge for now", a.name)),
+            Err(err) => errors.push(err),
+        }
+    }
+    Ok(errors)
+}
+
+#[tauri::command]
+fn project_remove_file(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.db.lock().unwrap().remove_project_file(&id).map_err(e)
+}
+
+#[tauri::command]
 fn delete_project(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
     state.db.lock().unwrap().delete_project(&id).map_err(e)
 }
@@ -255,7 +291,7 @@ fn chat_send(
     state.runs.lock().unwrap().insert(run_id.clone(), run.clone());
     let st = state.inner().clone();
     let args = SendArgs { conversation_id, content, model, replace_from };
-    tauri::async_runtime::spawn(chat::run(st, run_id.clone(), run, args, on_event));
+    tauri::async_runtime::spawn(chat::run(st, run_id.clone(), run, args, chat::Sink::channel(on_event)));
     Ok(run_id)
 }
 
@@ -316,6 +352,83 @@ async fn mcp_restart(state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
     state.mcp.stop(&name).await;
     state.mcp.start(&name).await;
     Ok(())
+}
+
+// ---------- tasks
+
+#[tauri::command]
+fn tasks_list(state: State<'_, Arc<AppState>>) -> Res<Vec<tasks::Task>> {
+    let running = state.running_tasks.lock().unwrap().clone();
+    let mut ts = state.db.lock().unwrap().tasks().map_err(e)?;
+    for t in &mut ts {
+        t.running = running.contains(&t.id);
+    }
+    Ok(ts)
+}
+
+#[tauri::command]
+fn task_save(state: State<'_, Arc<AppState>>, mut task: tasks::Task) -> Res<tasks::Task> {
+    if task.title.trim().is_empty() || task.prompt.trim().is_empty() || task.model.trim().is_empty() {
+        return Err("title, prompt and model are required".into());
+    }
+    if !tasks::valid_schedule(&task.schedule) {
+        return Err("schedule must be manual, every 5+ minutes, or daily at HH:MM".into());
+    }
+    state.db.lock().unwrap().save_task(&mut task).map_err(e)?;
+    Ok(task)
+}
+
+#[tauri::command]
+fn task_delete(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.db.lock().unwrap().delete_task(&id).map_err(e)
+}
+
+#[tauri::command]
+async fn task_run_now(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    let task = state.db.lock().unwrap().task(&id).map_err(e)?.ok_or("task not found")?;
+    if state.running_tasks.lock().unwrap().contains(&id) {
+        return Err("task is already running".into());
+    }
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn(tasks::run_task(st, app, task));
+    Ok(())
+}
+
+// ---------- desktop extensions (.mcpb / .dxt)
+
+#[derive(Serialize)]
+struct ExtensionPick {
+    token: String,
+    preview: extensions::Preview,
+}
+
+#[tauri::command]
+async fn extension_pick(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<Option<ExtensionPick>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().add_filter("Desktop extension", &["mcpb", "dxt"]).pick_file(move |f| {
+        let _ = tx.send(f);
+    });
+    let Ok(Some(f)) = rx.await else { return Ok(None) };
+    let path = f.into_path().map_err(e)?;
+    let (_, preview) = extensions::read_manifest(&path).map_err(e)?;
+    let token = db::new_id();
+    state.pending_ext.lock().unwrap().insert(token.clone(), path);
+    Ok(Some(ExtensionPick { token, preview }))
+}
+
+#[tauri::command]
+async fn extension_install(state: State<'_, Arc<AppState>>, token: String, values: std::collections::BTreeMap<String, String>) -> Res<String> {
+    let path = state.pending_ext.lock().unwrap().remove(&token).ok_or("pick the extension again")?;
+    let root = state.mcp_config_path.parent().map(|p| p.join("extensions")).ok_or("no data dir")?;
+    let (name, server) = extensions::install(&path, &root, &values).map_err(e)?;
+    let mut cfg = McpConfig::load(&state.mcp_config_path);
+    cfg.servers.insert(name.clone(), server);
+    cfg.save(&state.mcp_config_path).map_err(e)?;
+    state.mcp.stop(&name).await;
+    state.mcp.set_config(&cfg).await;
+    state.mcp.start(&name).await;
+    Ok(name)
 }
 
 #[derive(Serialize)]
@@ -560,7 +673,7 @@ fn quick_entry_submit(app: tauri::AppHandle, text: String, model: Option<String>
 /// Menu actions reachable from keyboard shortcuts too (zoom lives in the backend).
 #[tauri::command]
 async fn menu_action(app: tauri::AppHandle, id: String) {
-    if matches!(id.as_str(), "zoom_in" | "zoom_out" | "zoom_reset" | "quick_entry") {
+    if matches!(id.as_str(), "zoom_in" | "zoom_out" | "zoom_reset" | "quick_entry" | "quit") {
         shell::on_menu(&app, &tauri::menu::MenuEvent { id: tauri::menu::MenuId::new(id) });
     }
 }
@@ -613,13 +726,19 @@ fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // single-instance must be first; with its deep-link feature, links opened while the
+        // app runs are forwarded to this instance's on_open_url handler.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::QUICK]).build())
         .register_uri_scheme_protocol("artifact", |ctx, req| serve_artifact(ctx.app_handle(), &req))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // OPENCLAUDE_DATA_DIR isolates test runs from the user's real profile.
             let data_dir = match std::env::var_os("OPENCLAUDE_DATA_DIR") {
@@ -645,11 +764,27 @@ pub fn run() {
                 artifacts: Default::default(),
                 code: Default::default(),
                 zoom: std::sync::Mutex::new(1.0),
+                pending_ext: Default::default(),
+                running_tasks: Default::default(),
             });
             app.manage(state.clone());
-            app.set_menu(shell::build_menu(app.handle())?)?;
-            app.on_menu_event(|app, e| shell::on_menu(app, &e));
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let h = app.handle().clone();
+                app.deep_link().on_open_url(move |ev| {
+                    for url in ev.urls() {
+                        shell::handle_deep_link(&h, url.as_str());
+                    }
+                });
+                // Launch via a link (app not yet running): the URL arrives as a start argument.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        shell::handle_deep_link(app.handle(), url.as_str());
+                    }
+                }
+            }
             shell::build_tray(app.handle())?;
+            tasks::start_scheduler(state.clone(), app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 state.mcp.set_config(&McpConfig::load(&mcp_config_path)).await;
@@ -686,6 +821,9 @@ pub fn run() {
             list_projects,
             save_project,
             delete_project,
+            project_files,
+            project_add_files,
+            project_remove_file,
             list_conversations,
             create_conversation,
             update_conversation,
@@ -703,6 +841,12 @@ pub fn run() {
             mcp_restart,
             mcp_import_candidates,
             mcp_import,
+            extension_pick,
+            tasks_list,
+            task_save,
+            task_delete,
+            task_run_now,
+            extension_install,
             pick_attachments,
             artifact_put,
             pick_workspace,

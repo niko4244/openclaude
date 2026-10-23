@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { api, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { api, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 
-type Tab = "general" | "gateway" | "models" | "connectors" | "projects" | "about";
+type Tab = "general" | "gateway" | "models" | "connectors" | "extensions" | "projects" | "about";
 const TABS: [Tab, string][] = [
   ["general", "General"],
   ["gateway", "Gateway"],
   ["models", "Models"],
   ["connectors", "Connectors (MCP)"],
+  ["extensions", "Extensions"],
   ["projects", "Projects"],
   ["about", "About"],
 ];
@@ -60,6 +63,7 @@ export function Settings({
         {tab === "gateway" && <Gateway onChanged={onGatewayChanged} toast={toast} />}
         {tab === "models" && <Models models={models} onRefresh={onModelsChanged} />}
         {tab === "connectors" && <Connectors toast={toast} />}
+        {tab === "extensions" && <Extensions toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
         {tab === "about" && <About />}
         </div>
@@ -377,6 +381,8 @@ function Projects({ projects, models, onChanged, toast }: { projects: Project[];
 
 function About() {
   const [info, setInfo] = useState<{ version: string; data_dir: string; mcp_config: string } | null>(null);
+  const [upd, setUpd] = useState<string | null>(null);
+  const [pending, setPending] = useState<Update | null>(null);
   useEffect(() => { void api.appInfo().then(setInfo); }, []);
   return (
     <div className="card">
@@ -384,6 +390,71 @@ function About() {
       <div className="muted">An independent desktop client for your own LiteLLM gateway, local models and MCP connectors. Not affiliated with Anthropic.</div>
       <div className="muted mono" style={{ marginTop: 8 }}>data: {info?.data_dir}</div>
       <div className="muted mono">connectors: {info?.mcp_config}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+        <button className="btn" onClick={async () => {
+          setUpd("Checking…");
+          try {
+            const u = await check();
+            setPending(u);
+            setUpd(u ? `Version ${u.version} is available.` : "You are on the latest version.");
+          } catch (e) { setUpd(`Update check failed: ${String(e).slice(0, 160)}`); }
+        }}>Check for updates</button>
+        {pending && <button className="btn primary" onClick={async () => { setUpd("Downloading and installing…"); await pending.downloadAndInstall(); await relaunch(); }}>Install and restart</button>}
+        {upd && <span className="muted">{upd}</span>}
+      </div>
+      <div className="muted" style={{ marginTop: 6 }}>Updates are signed; the app only installs packages signed with the OpenClaude release key.</div>
     </div>
+  );
+}
+
+function Extensions({ toast }: { toast: (m: string) => void }) {
+  const [pick, setPick] = useState<{ token: string; preview: ExtensionPreview } | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <p className="muted">Desktop extensions are packaged MCP servers (<span className="mono">.mcpb</span>, formerly <span className="mono">.dxt</span>). Installing extracts the bundle into OpenClaude’s data folder and adds it as a connector. Sensitive settings are stored in Windows Credential Manager.</p>
+      <button className="btn primary" onClick={async () => {
+        setErr(null);
+        try {
+          const p = await api.extensionPick();
+          if (p) {
+            setPick(p);
+            setValues(Object.fromEntries(p.preview.user_config.map((f) => [f.key, f.default == null ? "" : String(f.default)])));
+          }
+        } catch (e) { setErr(String(e)); }
+      }}>Install extension…</button>
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
+      {pick && (
+        <div className="card">
+          <div className="card-head">
+            <span className="name">{pick.preview.display_name}</span>
+            <span className="badge">v{pick.preview.version}</span>
+            <span className="badge">{pick.preview.server_type}</span>
+            <span className={`badge ${pick.preview.signature === "unsigned" ? "" : "local"}`}>{pick.preview.signature}</span>
+          </div>
+          <div className="muted" style={{ margin: "6px 0" }}>{pick.preview.description}{pick.preview.author ? ` · by ${pick.preview.author}` : ""}</div>
+          {pick.preview.tools.length > 0 && <div className="tool-list">{pick.preview.tools.map((t) => <span key={t} className="badge">{t}</span>)}</div>}
+          {pick.preview.user_config.map((f) => (
+            <div className="field" key={f.key}>
+              <label>{f.title}{f.required ? " *" : ""}</label>
+              <input type={f.sensitive ? "password" : "text"} value={values[f.key] ?? ""} autoComplete="off" onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} placeholder={f.kind} />
+              {f.description && <span className="help">{f.description}</span>}
+            </div>
+          ))}
+          <div className="muted" style={{ margin: "8px 0" }}>This extension will run local code on your computer with your user permissions. Only install extensions you trust.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn primary" disabled={busy} onClick={async () => {
+              setBusy(true); setErr(null);
+              try { const n = await api.extensionInstall(pick.token, values); toast(`Installed ${n}`); setPick(null); }
+              catch (e) { setErr(String(e)); }
+              finally { setBusy(false); }
+            }}>{busy ? "Installing…" : "Install"}</button>
+            <button className="btn" onClick={() => setPick(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

@@ -1,92 +1,60 @@
-# OpenClaude Desktop 0.1.0: release readiness
+# OpenClaude Desktop: release readiness
 
-Date: 2026-10-23 · Branch: `feat/desktop-2.0` · Verdict: **developer preview (not full parity)**
+Updated: 2026-10-23 (tranches T1–T8) · Branch: `feat/desktop-2.0` · PR: niko4244/openclaude#1
+**Verdict: strong developer preview.** 13 of 25 parity rows are operational, 7 partial, 3 missing (computer use, voice, browser
+extension) and 2 not planned (cloud sync, Office/BLE surfaces). See `docs/parity/FEATURE_MATRIX.md` and `docs/parity/GOAL.md`.
 
-This is a working, installable Windows app for chat, MCP tools, projects, artifacts and a coding workspace on your own
-LiteLLM gateway. It is **not** at full Claude Desktop parity: 6 of 25 matrix rows are operational, 10 partial, 9 missing or not planned.
-See `docs/parity/FEATURE_MATRIX.md`.
+## Build artifacts
 
-## Build artifacts (reproducible: `scripts/with-msvc.ps1 npx tauri build`)
-
-| Artifact | Size |
+| Artifact | Notes |
 |---|---|
-| `bundle/nsis/OpenClaude_0.1.0_x64-setup.exe` (per-user, no admin) | 4.4 MB |
-| `bundle/msi/OpenClaude_0.1.0_x64_en-US.msi` | 6.2 MB |
-| `release/openclaude-desktop.exe` (portable; needs WebView2, which ships with Windows 11) | single exe |
+| `bundle/nsis/OpenClaude_0.1.0_x64-setup.exe` (~5 MB) | per-user install, registers `openclaude://` |
+| `bundle/msi/OpenClaude_0.1.0_x64_en-US.msi` (~7 MB) | |
+| `release/openclaude-desktop.exe` | portable; deep links need the installer |
 
-Not signed. Windows SmartScreen will warn until a code-signing certificate is configured (`bundle.windows.certificateThumbprint`).
+`scripts/release.ps1` produces signed updater artifacts plus `latest.json`. The private key lives outside the repo in
+`~\.tauri`. With `-Publish` it creates a GitHub release on the fork. Nothing has been published yet. The binaries are not
+Authenticode-signed, so SmartScreen will warn.
 
 ## Evidence
 
-### Real desktop E2E on the packaged exe (`e2e/desktop.e2e.mjs`): 15/15 pass
-Launches `openclaude-desktop.exe` with an isolated profile, attaches to WebView2 over CDP, and runs against the live gateway
-with `qwen-local`.
+### Real-desktop E2E on the packaged exe (`desktop/e2e/desktop.e2e.mjs`): 30/30 pass (cold start 0.8–3.0 s, warm 0.6–1.3 s across runs)
+These run against the live LiteLLM gateway with `qwen-local`, using an isolated profile and two launches:
 
-| Check | Result |
-|---|---|
-| Cold start → UI | 3.3 s (fresh profile) |
-| Gateway online + authenticated | ✅ |
-| Live catalog in picker | ✅ 124 models |
-| Streaming chat | ✅ first token 207 ms, total 603 ms |
-| Routing metadata (requested model, routed host, tokens, latency) | ✅ |
-| Conversation persisted + auto-titled | ✅ |
-| MCP stdio connector added via Settings UI → connected | ✅ |
-| Tool call → approval card → Allow → result used in answer | ✅ "PAPAYA-42" |
-| Stop generation keeps partial reply (status `cancelled`) | ✅ |
-| HTML artifact renders in side pane | ✅ |
-| Artifact frame cannot invoke app commands | ✅ |
-| History survives restart (4 chats) | ✅ |
-| Warm start → UI | 1.3 s |
-| Reopened chat shows messages | ✅ |
+- **Startup and catalog:** cold and warm start; gateway status; live catalog (124 models).
+- **Chat:** streaming; routing metadata; persistence and auto-titles; stop keeps the partial reply; find in chat; regenerate plus branch navigation (2/2 → 1/2).
+- **Tools:** MCP connector added through Settings; approval card leading to tool execution.
+- **Artifacts:** titled artifact auto-opens as a card in the panel; the artifact frame cannot invoke app commands.
+- **Shell:** shortcuts sheet; settings lock (the UI cannot grant itself folders or swap the agent binary); Quick Entry window hand-off; deep link `openclaude://new?prompt=…` prefills without sending.
+- **Code workspace:** recent folder, command runner, git status.
+- **Projects and tasks:** project knowledge answers from the file ("BLUE-HERON-7"); task created in the UI, run in the background, result opened as a chat.
+- **Updates:** the update check reports its status. No release is published yet, so it truthfully reports that no release JSON was found.
 
-### Artifact isolation (`e2e/artifact-isolation.e2e.mjs`): 4/4 pass
-A hostile artifact tried every route to the backend. Tauri does inject its IPC shim (`__TAURI_INTERNALS__`) into subframes, but:
-`invoke` gets no response (the capability origin check fails); `window.parent` access throws SecurityError (opaque sandbox
-origin); and `fetch` to `ipc.localhost` is blocked by the artifact CSP.
+### Artifact isolation (`desktop/e2e/artifact-isolation.e2e.mjs`): 4/4
+A hostile artifact cannot invoke commands, reach `window.parent`, or fetch `ipc.localhost`.
 
-### Capability probe (live, content-validated)
-| Model | chat | stream | system | tools | json | vision |
-|---|---|---|---|---|---|---|
-| qwen-local | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ backend: no mmproj |
-| coder-local | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ backend: no mmproj |
-| brainz-chain | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ HTTP 200, but the model could not see the image |
-| gemma4-local, spark-x2.6-local, zen-deepseek-v4.1-flash-free | ⏱ no reply in 90 s | | | | | |
-| openrouter-qwen3.8-flash, routeway-glm-5.3-flash | ❌ 402 no credits | | | | | |
-| tokenrouter-kimi-k3 | ❌ 403 quota | | | | | |
-| fireworks-qwen3-coder-32b | ❌ 404 not deployed | | | | | |
+### Rust (`cargo test --lib`): 26 pass, 2 live tests ignored by default
+Coverage includes:
+- **Gateway and chat:** gateway normalization and tool-call merging; orphan tool-call repair; context compaction cut selection.
+- **Storage:** SQLite migrations v1–v4; branch switching.
+- **MCP and extensions:** a real stdio MCP round-trip; `.mcpb` install of a real bundle that then runs as a connector; zip-slip and bad-name rejection.
+- **Projects:** project-knowledge retrieval (BM25 finds the relevant paragraph in a file far over budget).
+- **Tasks:** schedule math and no-double-run claiming.
+- **Security and plumbing:** settings allowlist; deep-link parsing; Markdown export; CLI adapter flags; shell runner.
 
-The chat runtime stops offering tools to any model whose declared or measured tool support is "no".
+### Live capability probe (opt-in, content-validated)
+- `qwen-local`, `coder-local` and `brainz-chain` pass chat, streaming, system prompt, tools and JSON. All three fail vision.
+- Most cloud aliases on this gateway currently fail upstream on credits, quota or 404s. That is the provider accounts, not the app.
 
-### Rust (12 tests, `cargo test --lib`)
-Gateway metadata normalization (unknowns stay unknown, no secret leakage), fragmented tool-call merge, SQLite migrations, CRUD
-and non-destructive supersede, reopen idempotence, MCP config compatibility, tool-name sanitization, **real stdio MCP round-trip**,
-orphaned tool-call repair, CLI adapter flags (gateway URL, no `--dangerously-*`), and git status on a real repo.
-
-### Live gateway (`live_gateway_catalog_stream_and_tools`, ignored by default)
-124 aliases discovered (56 routed to local backends).
-
-| Model | Chat stream | Tool call | Note |
-|---|---|---|---|
-| qwen-local | ✅ TTFT 179 ms | ✅ `get_weather{"city":"Paris"}` | Ollama via LiteLLM |
-| coder-local | ✅ TTFT 329 ms | ✅ | |
-| groq-gptoss-120b | ❌ upstream 403 "Access denied" | ❌ | provider/network, not app |
-| nvidia-nemotron-super | ❌ upstream 404 then cooldown 429 | ❌ | provider account |
-| claude-haiku-5-5 | ❌ Anthropic "credit balance too low" | ❌ | provider billing |
-
-Errors are surfaced verbatim in the chat (with LiteLLM's "No fallback was attempted" note). No silent substitution.
-
-### Coding agent adapter
-The OpenClaude CLI ran headless (`--input-format/--output-format stream-json --provider openai --model coder-local
---permission-mode acceptEdits`) against LiteLLM in a scratch git repo. It created `hello.py` through its Write tool and ended
-with `result: success`.
-
-### Feature intelligence
-`node desktop/feature-intel/monitor.mjs` baselined 8 sources (local Claude builds, MCP spec, TS SDK, npm SDK, MCPB, Claude Code,
-LiteLLM, Claude apps release notes). It writes reports and draft issues to `docs/feature-intel/reports/`. It never installs or executes
-anything.
-
-## Known issues / not done
-- The very first launch of a freshly built exe took 16 s in one run (AV scan + WebView2 profile creation). Later cold starts took 3.3 s.
-- Model capability metadata: the live gateway declares almost none. Use Settings → Models → Probe to measure them. Probe results feed tool gating, but not the picker badges yet.
-- Not done: Tasks/Cowork, tray, find-in-page, native menu, `.mcpb` extensions, OAuth MCP, voice, computer use, auto-update,
-  code signing, Code-tab terminal/worktrees, artifact versions, context compaction, branch navigation UI.
+## Known gaps
+- **Not built yet:**
+  - Computer use and voice.
+  - Remote MCP OAuth and the legacy SSE transport.
+  - Extension signature verification and an extension directory.
+  - PDF knowledge extraction.
+  - A Cowork-style VM and spaces.
+  - Code-tab worktrees and a preview browser.
+  - Run-on-login.
+- **Release prerequisites:** a first published release and code signing.
+- **Platform:** the menu lives in the frameless title bar (no Win32 menu bar). Keyboard shortcuts are handled in the webview.
+- **Attachments:** implemented through the native picker and drag-drop, but not automated in E2E because native dialogs can't be driven over CDP.

@@ -30,7 +30,27 @@ const MIGRATIONS: &[&str] = &[
         SELECT m2.id FROM messages m2 WHERE m2.conversation_id = messages.conversation_id AND m2.seq < messages.seq
         ORDER BY m2.seq DESC LIMIT 1);
      CREATE INDEX messages_parent ON messages(conversation_id, parent_id);",
+    // v3: project knowledge files (extracted text)
+    "CREATE TABLE project_files(
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, text TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL);
+     CREATE INDEX project_files_p ON project_files(project_id);",
+    // v4: tasks (scheduled / background prompts)
+    "CREATE TABLE tasks(
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL, model TEXT NOT NULL,
+        schedule TEXT NOT NULL DEFAULT 'manual', enabled INTEGER NOT NULL DEFAULT 1,
+        next_run_at INTEGER, last_run_at INTEGER, last_status TEXT, last_conversation_id TEXT,
+        created_at INTEGER NOT NULL);",
 ];
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProjectFile {
+    pub id: String,
+    pub name: String,
+    pub size: i64,
+    pub chars: i64,
+    pub created_at: i64,
+}
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -172,6 +192,31 @@ impl Db {
     }
     pub fn get_project(&self, id: &str) -> anyhow::Result<Option<Project>> {
         Ok(self.list_projects()?.into_iter().find(|p| p.id == id))
+    }
+    pub fn add_project_file(&self, project_id: &str, name: &str, text: &str, size: i64) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO project_files(id,project_id,name,text,size,created_at) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![new_id(), project_id, name, text, size, now_ms()],
+        )?;
+        Ok(())
+    }
+    pub fn project_files(&self, project_id: &str) -> anyhow::Result<Vec<ProjectFile>> {
+        let mut st = self.conn.prepare(
+            "SELECT id,name,size,length(text),created_at FROM project_files WHERE project_id=?1 ORDER BY created_at",
+        )?;
+        let rows = st.query_map([project_id], |r| {
+            Ok(ProjectFile { id: r.get(0)?, name: r.get(1)?, size: r.get(2)?, chars: r.get(3)?, created_at: r.get(4)? })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+    pub fn project_docs(&self, project_id: &str) -> anyhow::Result<Vec<crate::knowledge::Doc>> {
+        let mut st = self.conn.prepare("SELECT name,text FROM project_files WHERE project_id=?1 ORDER BY created_at")?;
+        let rows = st.query_map([project_id], |r| Ok(crate::knowledge::Doc { name: r.get(0)?, text: r.get(1)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+    pub fn remove_project_file(&self, id: &str) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM project_files WHERE id=?1", [id])?;
+        Ok(())
     }
     pub fn delete_project(&self, id: &str) -> anyhow::Result<()> {
         self.conn.execute("DELETE FROM projects WHERE id=?1", [id])?;

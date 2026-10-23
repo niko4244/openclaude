@@ -12,8 +12,10 @@ import { Settings } from "./components/Settings";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { CodeView } from "./components/CodeView";
 import { FindBar, ShortcutsSheet } from "./components/FindBar";
-import { ChatsPage, ProjectsPage, SearchPalette, ago } from "./components/Pages";
+import { ChatsPage, ProjectKnowledge, ProjectsPage, SearchPalette, ago } from "./components/Pages";
 import { ToolsMenu } from "./components/ToolsMenu";
+import { TasksPage } from "./components/TasksPage";
+import { TitleBar } from "./components/TitleBar";
 import { Logo } from "./components/Logo";
 import { extractArtifacts, type Artifact } from "./components/Markdown";
 
@@ -68,7 +70,7 @@ export default function App() {
   }, []);
 
   const refreshConvs = useCallback(async () => setConvs(await api.listConversations(undefined, activeProject)), [activeProject]);
-  const chat = useChat(activeId, refreshConvs);
+  const chat = useChat(activeId, refreshConvs, toast);
   const active = convs.find((c) => c.id === activeId) || null;
 
   const loadModels = useCallback(async (refresh = false) => {
@@ -183,9 +185,12 @@ export default function App() {
   useEffect(() => {
     const u1 = listen<string>("menu", (e) => menuRef.current(e.payload));
     const u2 = listen<{ text: string; model: string | null }>("quick-submit", (e) => quickRef.current(e.payload));
+    // openclaude://new?prompt=… prefills a new chat; the user still presses Send.
+    const u3 = listen<string>("deep-link-new", (e) => menuRef.current(`deep:${e.payload}`));
     return () => {
       void u1.then((f) => f());
       void u2.then((f) => f());
+      void u3.then((f) => f());
     };
   }, []);
 
@@ -251,6 +256,11 @@ export default function App() {
   };
 
   menuRef.current = (id: string) => {
+    if (id.startsWith("deep:")) {
+      newChat();
+      setSeed({ key: `deep-${Date.now()}`, text: id.slice(5) });
+      return;
+    }
     switch (id) {
       case "new_chat": return newChat();
       case "settings": return go("settings");
@@ -286,6 +296,8 @@ export default function App() {
   const gatewayDown = status && !(status.reachable && status.authenticated);
 
   return (
+    <div className="shell">
+    <TitleBar onMenu={(id) => menuRef.current(id)} />
     <div className="app">
       <Sidebar
         collapsed={collapsed}
@@ -351,6 +363,8 @@ export default function App() {
           />
         ) : page === "code" ? (
           <CodeView models={modelsView} favorites={favorites} onToggleFavorite={toggleFavorite} defaultModel={model} />
+        ) : page === "tasks" ? (
+          <TasksPage models={models} defaultModel={model} onOpenChat={(id) => { void refreshConvs(); openChat(id); }} toast={toast} />
         ) : page === "chats" ? (
           <ChatsPage onOpen={openChat} onNew={newChat} />
         ) : page === "projects" ? (
@@ -385,6 +399,7 @@ export default function App() {
               {project && (
                 <div className="project-home">
                   {project.instructions && <div className="card"><div className="muted">Instructions</div><div style={{ whiteSpace: "pre-wrap" }}>{project.instructions}</div></div>}
+                  <ProjectKnowledge projectId={project.id} toast={toast} />
                   <div className="section-label" style={{ padding: "12px 2px 4px" }}>Chats in this project</div>
                   {convs.map((c) => (
                     <button key={c.id} className="list-row" onClick={() => openChat(c.id)}>
@@ -446,6 +461,7 @@ export default function App() {
         />
       )}
       {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
+    </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderClosed, MessageSquare, Plus, Search } from "lucide-react";
-import { api, type Conversation, type Project } from "../api";
+import { FileText, FolderClosed, MessageSquare, Plus, Search, X } from "lucide-react";
+import { api, type Conversation, type Project, type ProjectFile } from "../api";
 
 export function ago(ts: number) {
   const s = (Date.now() - ts) / 1000;
@@ -90,6 +90,30 @@ export function ProjectsPage({ projects, onOpen, onCreate }: { projects: Project
           {!projects.length && <div className="muted">No projects yet. Create one to group chats with shared instructions.</div>}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Project knowledge: text files every chat in the project can draw on. */
+export function ProjectKnowledge({ projectId, toast }: { projectId: string; toast: (m: string) => void }) {
+  const [files, setFiles] = useState<ProjectFile[]>([]);
+  const load = async () => setFiles(await api.projectFiles(projectId));
+  useEffect(() => { void load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chars = files.reduce((n, f) => n + f.chars, 0);
+  return (
+    <div className="card knowledge">
+      <div className="card-head">
+        <span className="name">Project knowledge</span>
+        <span className="muted">{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} · ${Math.round(chars / 1000)}K chars · ${chars <= 60000 ? "all in context" : "relevant excerpts per message"}` : "none yet"}</span>
+        <span className="spacer" />
+        <button className="btn" onClick={async () => { const errs = await api.projectAddFiles(projectId); errs.forEach(toast); await load(); }}><Plus size={14} /> Add files</button>
+      </div>
+      {files.map((f) => (
+        <div key={f.id} className="kfile">
+          <FileText size={14} className="muted" /><span className="grow">{f.name}</span><span className="muted">{(f.size / 1024).toFixed(1)} KB</span>
+          <button className="icon-btn" aria-label={`Remove ${f.name}`} onClick={async () => { await api.projectRemoveFile(f.id); await load(); }}><X size={14} /></button>
+        </div>
+      ))}
     </div>
   );
 }

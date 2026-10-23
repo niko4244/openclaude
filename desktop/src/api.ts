@@ -36,6 +36,8 @@ export type Project = {
   updated_at: number;
 };
 
+export type ProjectFile = { id: string; name: string; size: number; chars: number; created_at: number };
+
 export type Conversation = {
   id: string;
   project_id: string | null;
@@ -87,7 +89,8 @@ export type ChatEvent =
   | { type: "tool_approval"; request_id: string; tool: string; server: string; arguments: unknown }
   | { type: "tool_result"; message: Message }
   | { type: "error"; message: string }
-  | { type: "done"; cancelled: boolean };
+  | { type: "done"; cancelled: boolean }
+  | { type: "compacted"; summarized: number };
 
 export type ToolDef = { name: string; description: string | null; inputSchema: unknown };
 export type ServerStatus = {
@@ -110,6 +113,32 @@ export type ServerConfig = {
   headers?: Record<string, string>;
   type?: string;
   disabled?: boolean;
+};
+export type Task = {
+  id: string;
+  title: string;
+  prompt: string;
+  model: string;
+  schedule: string;
+  enabled: boolean;
+  next_run_at: number | null;
+  last_run_at: number | null;
+  last_status: string | null;
+  last_conversation_id: string | null;
+  running: boolean;
+};
+
+export type ExtensionPreview = {
+  name: string;
+  display_name: string;
+  version: string;
+  description: string;
+  author: string | null;
+  server_type: string;
+  tools: string[];
+  user_config: { key: string; kind: string; title: string; description: string | null; required: boolean; sensitive: boolean; default: unknown }[];
+  signature: string;
+  manifest_version: string;
 };
 export type ImportCandidate = { source: string; path: string; servers: Record<string, ServerConfig> };
 
@@ -142,6 +171,9 @@ export const api = {
   listProjects: () => invoke<Project[]>("list_projects"),
   saveProject: (project: Project) => invoke<Project>("save_project", { project }),
   deleteProject: (id: string) => invoke<void>("delete_project", { id }),
+  projectFiles: (projectId: string) => invoke<ProjectFile[]>("project_files", { projectId }),
+  projectAddFiles: (projectId: string) => invoke<string[]>("project_add_files", { projectId }),
+  projectRemoveFile: (id: string) => invoke<void>("project_remove_file", { id }),
 
   listConversations: (query?: string, projectId?: string | null) =>
     invoke<Conversation[]>("list_conversations", { query: query || null, projectId: projectId ?? null }),
@@ -176,6 +208,12 @@ export const api = {
   mcpImportCandidates: () => invoke<ImportCandidate[]>("mcp_import_candidates"),
   mcpImport: (path: string, names: string[]) => invoke<number>("mcp_import", { path, names }),
 
+  tasksList: () => invoke<Task[]>("tasks_list"),
+  taskSave: (task: Task) => invoke<Task>("task_save", { task }),
+  taskDelete: (id: string) => invoke<void>("task_delete", { id }),
+  taskRunNow: (id: string) => invoke<void>("task_run_now", { id }),
+  extensionPick: () => invoke<{ token: string; preview: ExtensionPreview } | null>("extension_pick"),
+  extensionInstall: (token: string, values: Record<string, string>) => invoke<string>("extension_install", { token, values }),
   pickAttachments: () => invoke<AttachmentResult[]>("pick_attachments"),
   artifactPut: (html: string) => invoke<string>("artifact_put", { html }),
   probeModel: (model: string) => invoke<ProbeReport>("probe_model", { model }),

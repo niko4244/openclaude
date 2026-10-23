@@ -283,9 +283,23 @@ async fn connect(name: &str, cfg: &ServerConfig, log: Arc<std::sync::Mutex<VecDe
         "stdio" => {
             let cmd = cfg.command.as_deref().ok_or_else(|| anyhow::anyhow!("no command configured"))?;
             let (prog, args) = resolve_command(cmd, &cfg.args);
+            // `keyring:<user>` values are secrets kept in the OS credential store (extensions).
+            let env: HashMap<String, String> = cfg
+                .env
+                .iter()
+                .map(|(k, v)| {
+                    let val = match v.strip_prefix("keyring:") {
+                        Some(user) => keyring::Entry::new(crate::extensions::KEYRING_SERVICE, user)
+                            .and_then(|e| e.get_password())
+                            .unwrap_or_default(),
+                        None => v.clone(),
+                    };
+                    (k.clone(), val)
+                })
+                .collect();
             let mut c = Command::new(&prog);
             c.args(&args)
-                .envs(&cfg.env)
+                .envs(&env)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

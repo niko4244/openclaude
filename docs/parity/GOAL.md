@@ -14,14 +14,14 @@ update, and a commit pushed to the PR branch. No check-ins between tranches. Nik
 
 | # | Tranche | Matrix rows | Exit check |
 |---|---|---|---|
-| T1 | Core: gateway, chat, MCP, artifacts, persistence, Code adapter | 2, 3, 6, 7, 22 | ✅ E2E 15/15 |
-| T2 | Desktop shell: tray, Quick Entry window, native menu, find, shortcuts sheet, probe badges, Code terminal, settings lock | 4, 5, 11, 12, 13, 16 | E2E extended |
-| T3 | **Visual parity**: icon system, reference layout (sidebar sections, starred/recents, account footer), home greeting, composer (+ menu, connectors/tools menu, model menu, extended-thinking toggle), message chrome (action bar, feedback, timestamps), artifact panel chrome, settings as a modal-style page, motion | 1, 4, 10 + visual baselines | Side-by-side screenshots vs reference; E2E green |
-| T4 | Conversation depth: branch navigation (‹ 1/2 ›) over superseded turns, auto-artifacts (model emits artifacts that open in the panel) with versions, extended thinking / reasoning effort, per-chat connector toggles, ask-session approvals, context compaction, chat export | 2, 7, 15 | E2E per feature |
-| T5 | Projects depth: knowledge files (local indexing + retrieval), project-scoped connectors/models, project home screen | 14 | E2E |
-| T6 | Extensions: `.mcpb`/`.dxt` install (manifest, user_config, signatures shown), extension directory UI | 9 | E2E with a real bundle |
-| T7 | Tasks/Cowork-lite: background task runner, folder grants, scheduled runs, task history, approvals inbox | 17 | E2E |
-| T8 | Release: auto-update (Tauri updater, signed manifests on the fork's releases), code signing hook, perf budget (cold start under 3 s, idle memory), accessibility pass | 20 + release | Packaged-build acceptance |
+| T1 | Core: gateway, chat, MCP, artifacts, persistence, Code adapter | 2, 3, 6, 7, 22 | ✅ done |
+| T2 | Desktop shell: tray, Quick Entry window, native menu, find, shortcuts sheet, probe badges, Code terminal, settings lock | 4, 5, 11, 12, 13, 16 | ✅ done (E2E) |
+| T3 | **Visual parity**: icon system, reference layout (sidebar sections, starred/recents, account footer), home greeting, composer (+ menu, connectors/tools menu, model menu, extended-thinking toggle), message chrome (action bar, feedback, timestamps), artifact panel chrome, settings as a modal-style page, motion | 1, 4, 10 + visual baselines | ✅ first pass done; remaining: frameless title bar, motion polish |
+| T4 | Conversation depth: branch navigation (‹ 1/2 ›) over superseded turns, auto-artifacts (model emits artifacts that open in the panel) with versions, extended thinking / reasoning effort, per-chat connector toggles, ask-session approvals, context compaction, chat export | 2, 7, 15 | ✅ branches, auto-artifacts + versions, approval scopes, export, extended-thinking toggle; ⏳ context compaction |
+| T5 | Projects depth: knowledge files (local indexing + retrieval), project-scoped connectors/models, project home screen | 14 | ✅ text knowledge (full or retrieved); ⏳ PDF extraction |
+| T6 | Extensions: `.mcpb`/`.dxt` install (manifest, user_config, signatures shown), extension directory UI | 9 | ✅ install path (Rust E2E, real bundle); ⏳ signature verification, directory |
+| T7 | Tasks/Cowork-lite: background task runner, folder grants, scheduled runs, task history, approvals inbox | 17 | ✅ scheduled and background tasks; ⏳ Cowork-style spaces |
+| T8 | Release: auto-update (Tauri updater, signed manifests on the fork's releases), code signing hook, perf budget (cold start under 3 s, idle memory), accessibility pass | 20 + release | ✅ signed updater + release script, deep links, window state; ⏳ first published release, code signing |
 | T9 | Stretch: voice (local STT through the gateway or Whisper), computer use (approval-gated), deep links, remote MCP OAuth | 8, 18, 19, 23 | E2E where automatable |
 
 ## Reference baseline

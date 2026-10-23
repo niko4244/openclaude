@@ -18,7 +18,7 @@ const emptyRun = (): LiveRun => ({ runId: null, text: "", reasoning: "", toolNam
  * Chat state for the open conversation. Runs keep going in the backend when the
  * user switches away; everything is persisted there, so we just reload.
  */
-export function useChat(conversationId: string | null, onTurnFinished: () => void) {
+export function useChat(conversationId: string | null, onTurnFinished: () => void, onNotice?: (m: string) => void) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [runs, setRuns] = useState<Record<string, LiveRun>>({});
   const convRef = useRef(conversationId);
@@ -30,8 +30,9 @@ export function useChat(conversationId: string | null, onTurnFinished: () => voi
   }, []);
 
   useEffect(() => {
+    // Clear first so the previous chat never flashes while the new one loads.
+    setMessages([]);
     if (conversationId) void reload(conversationId);
-    else setMessages([]);
   }, [conversationId, reload]);
 
   const patch = (cid: string, f: (r: LiveRun) => LiveRun) => setRuns((rs) => ({ ...rs, [cid]: f(rs[cid] ?? emptyRun()) }));
@@ -73,6 +74,9 @@ export function useChat(conversationId: string | null, onTurnFinished: () => voi
           case "error":
             patch(cid, (r) => ({ ...r, error: e.message }));
             break;
+          case "compacted":
+            onNotice?.(`Earlier messages (${e.summarized}) were summarized to fit the model's context window.`);
+            break;
           case "done":
             setRuns((rs) => {
               const r = rs[cid];
@@ -92,7 +96,7 @@ export function useChat(conversationId: string | null, onTurnFinished: () => voi
         patch(cid, () => ({ ...emptyRun(), error: String(err) }));
       }
     },
-    [reload, onTurnFinished],
+    [reload, onTurnFinished, onNotice],
   );
 
   const stop = useCallback(async (cid: string) => {

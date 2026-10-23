@@ -1,10 +1,9 @@
-//! Native desktop shell: menu bar, tray icon, close-to-tray, Quick Entry window.
-//! Menu items carry no OS accelerators. WebView2 owns keyboard focus, so
-//! shortcuts are handled in the frontend; the labels just show them.
+//! Native desktop shell: tray icon, close-to-tray, Quick Entry window, deep links.
+//! The window is frameless; its app menu lives in the React title bar.
 
 use crate::state::AppState;
 use std::sync::Arc;
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
@@ -16,42 +15,6 @@ fn item(app: &AppHandle, id: &str, label: &str, hint: Option<&str>) -> tauri::Re
         None => label.to_string(),
     };
     MenuItem::with_id(app, id, text, true, None::<&str>)
-}
-
-pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let file = Submenu::with_items(app, "File", true, &[
-        &item(app, "new_chat", "New chat", Some("Ctrl+N"))?,
-        &item(app, "quick_entry", "Quick entry", Some("Ctrl+Alt+Space"))?,
-        &PredefinedMenuItem::separator(app)?,
-        &item(app, "settings", "Settings…", Some("Ctrl+,"))?,
-        &PredefinedMenuItem::separator(app)?,
-        &item(app, "quit", "Quit OpenClaude", None)?,
-    ])?;
-    let edit = Submenu::with_items(app, "Edit", true, &[
-        &PredefinedMenuItem::undo(app, None)?,
-        &PredefinedMenuItem::redo(app, None)?,
-        &PredefinedMenuItem::separator(app)?,
-        &PredefinedMenuItem::cut(app, None)?,
-        &PredefinedMenuItem::copy(app, None)?,
-        &PredefinedMenuItem::paste(app, None)?,
-        &PredefinedMenuItem::select_all(app, None)?,
-        &PredefinedMenuItem::separator(app)?,
-        &item(app, "find", "Find in chat", Some("Ctrl+F"))?,
-    ])?;
-    let view = Submenu::with_items(app, "View", true, &[
-        &item(app, "toggle_sidebar", "Toggle sidebar", Some("Ctrl+B"))?,
-        &item(app, "search", "Search chats", Some("Ctrl+K"))?,
-        &item(app, "code", "Code workspace", None)?,
-        &PredefinedMenuItem::separator(app)?,
-        &item(app, "zoom_in", "Zoom in", Some("Ctrl+="))?,
-        &item(app, "zoom_out", "Zoom out", Some("Ctrl+-"))?,
-        &item(app, "zoom_reset", "Actual size", Some("Ctrl+0"))?,
-    ])?;
-    let help = Submenu::with_items(app, "Help", true, &[
-        &item(app, "shortcuts", "Keyboard shortcuts", Some("Ctrl+/"))?,
-        &item(app, "about", "About OpenClaude", None)?,
-    ])?;
-    Menu::with_items(app, &[&file, &edit, &view, &help])
 }
 
 pub fn show_main(app: &AppHandle) {
@@ -171,4 +134,33 @@ pub fn intercept_close(window: &tauri::Window) -> bool {
         let _ = st.db.lock().unwrap().set_setting("tray_notice_shown", "1");
     }
     true
+}
+
+/// `openclaude://new?prompt=...` opens a new chat with the prompt prefilled. It never
+/// auto-sends: a link on a web page must not be able to start a request by itself.
+pub fn handle_deep_link(app: &AppHandle, raw: &str) {
+    let Some(prompt) = parse_deep_link(raw) else { return };
+    show_main(app);
+    let _ = app.emit_to("main", "deep-link-new", prompt);
+}
+
+pub fn parse_deep_link(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    if url.scheme() != "openclaude" || url.host_str() != Some("new") {
+        return None;
+    }
+    let prompt = url.query_pairs().find(|(k, _)| k == "prompt").map(|(_, v)| v.to_string()).unwrap_or_default();
+    Some(prompt.chars().take(4000).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn deep_links() {
+        assert_eq!(super::parse_deep_link("openclaude://new?prompt=hello%20world").as_deref(), Some("hello world"));
+        assert_eq!(super::parse_deep_link("openclaude://new").as_deref(), Some(""));
+        assert_eq!(super::parse_deep_link("openclaude://settings/delete"), None);
+        assert_eq!(super::parse_deep_link("https://new?prompt=x"), None);
+        assert_eq!(super::parse_deep_link(&format!("openclaude://new?prompt={}", "a".repeat(9000))).unwrap().len(), 4000);
+    }
 }

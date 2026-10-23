@@ -14,6 +14,15 @@
     "opener:allow-open-url",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered"
+    "global-shortcut:allow-is-registered",
+    "updater:default",
+    "process:allow-restart",
+    "window-state:default",
+    "deep-link:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-maximized"
   ]
 }

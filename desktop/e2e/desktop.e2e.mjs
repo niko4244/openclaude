@@ -214,6 +214,10 @@ try {
   writeFileSync(join(repo, "new-file.txt"), "hello");
   const db = new DatabaseSync(join(dataDir, "openclaude.db"));
   db.prepare("INSERT INTO settings(key,value) VALUES('workspaces',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify([repo]));
+  // a project with a knowledge file, as the Add files dialog would have stored it
+  const now = Date.now();
+  db.prepare("INSERT INTO projects(id,name,instructions,default_model,created_at,updated_at) VALUES('p-e2e','Heron Project','Answer briefly.',?,?,?)").run(model, now, now);
+  db.prepare("INSERT INTO project_files(id,project_id,name,text,size,created_at) VALUES('f-e2e','p-e2e','brief.md',?,100,?)").run("Internal brief. The project codename is BLUE-HERON-7. Launch is planned for spring.", now);
   db.close();
 
   // 8. persistence across restart
@@ -229,6 +233,7 @@ try {
   // 9. find in chat
   await p2.keyboard.press("Control+f");
   await p2.fill(".findbar input", "pong");
+  await p2.waitForFunction(() => /^\d+ \/ [1-9]/.test(document.querySelector(".findbar .muted")?.textContent || ""), null, { timeout: 5000 }).catch(() => {});
   const findCount = await p2.locator(".findbar .muted").innerText();
   record("find in chat highlights matches", /^1 \/ [1-9]/.test(findCount), findCount);
   await p2.screenshot({ path: join(out, "08-find.png") });
@@ -300,6 +305,51 @@ try {
   const gitPanel = await p2.locator('.artifact-panel .nav-item:has-text("new-file.txt")').count();
   record("code tab shows git status", gitPanel > 0);
   await p2.screenshot({ path: join(out, "10-code-terminal.png") });
+
+  // 14. project knowledge reaches the model
+  await p2.click('.nav-item:has-text("Projects")');
+  await p2.click('.project-card:has-text("Heron Project")');
+  const kcard = await p2.waitForSelector('.knowledge .kfile:has-text("brief.md")', { timeout: 10000 }).then(() => 1, () => 0);
+  record("project shows knowledge files", kcard === 1);
+  await p2.screenshot({ path: join(out, "11-project.png") });
+  await sendMessage(p2, "What is the project codename? Answer with just the codename.");
+  await waitIdle(p2);
+  const kr = await lastAssistantText(p2);
+  record("project knowledge used in answer", /BLUE-HERON-7/i.test(kr), JSON.stringify(kr.slice(0, 80)));
+
+  // 15. tasks: create, run now, open result
+  await p2.click('.nav-item:has-text("Tasks")');
+  await p2.click('button:has-text("New task")');
+  await p2.fill('.field:has(label:text-is("Title")) input', "E2E ping");
+  await p2.fill('.field:has(label:text-is("Prompt")) textarea', "Reply with exactly one word: tasked");
+  await p2.selectOption('.field:has(label:text-is("Model")) select', model);
+  await p2.click('button:has-text("Save task")');
+  await p2.click('.task-row:has-text("E2E ping") button:has-text("Run now")');
+  const taskOk = await p2.waitForSelector('.task-row:has-text("E2E ping") :text("ok")', { timeout: 120000 }).then(() => true, () => false);
+  const tstatus = await p2.locator('.task-row:has-text("E2E ping")').innerText();
+  record("task runs in background", taskOk, tstatus.replace(/\s+/g, " ").slice(0, 120));
+  await p2.screenshot({ path: join(out, "12-tasks.png") });
+  if (taskOk) {
+    await p2.click('.task-row:has-text("E2E ping") button:has-text("Open result")');
+    const opened = await p2.waitForFunction(() => /tasked/i.test([...document.querySelectorAll(".msg.assistant .assistant-body")].pop()?.textContent || ""), null, { timeout: 10000 }).then(() => true, () => false);
+    record("task result opens as a chat", opened, JSON.stringify((await lastAssistantText(p2)).slice(0, 60)));
+  }
+
+  // 17. deep link opened while running: forwarded by single-instance, prefilled, not sent
+  const before2 = await p2.locator(".conv-item").count();
+  spawn(exe, ["openclaude://new?prompt=Hello%20from%20a%20link"], { env: { ...process.env, OPENCLAUDE_DATA_DIR: dataDir }, stdio: "ignore" });
+  const prefilled = await p2.waitForFunction(() => document.querySelector(".home .composer textarea")?.value === "Hello from a link", null, { timeout: 15000 }).then(() => true, () => false);
+  record("deep link prefills a new chat (not sent)", prefilled && (await p2.locator(".conv-item").count()) === before2);
+
+  // 16. update check reports a status (no release is published yet, so a failure message is expected)
+  await p2.keyboard.press("Control+,");
+  await p2.click('button[role="tab"]:has-text("About")');
+  await p2.click('button:has-text("Check for updates")');
+  const upd = await p2.waitForFunction(() => {
+    const t = [...document.querySelectorAll(".settings .muted")].map((e) => e.textContent || "").find((x) => /latest version|is available|Update check failed/.test(x));
+    return t || null;
+  }, null, { timeout: 30000 }).then((h) => h.jsonValue(), () => "");
+  record("update check reports status", !!upd, String(upd).slice(0, 120));
 } catch (e) {
   record("harness", false, String(e?.stack || e));
 } finally {
