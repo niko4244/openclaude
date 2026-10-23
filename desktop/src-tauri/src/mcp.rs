@@ -1,4 +1,5 @@
-//! Minimal MCP client (JSON-RPC 2.0) over stdio and Streamable HTTP.
+//! Minimal MCP client (JSON-RPC 2.0) over stdio, Streamable HTTP and legacy HTTP+SSE.
+//! Remote servers that answer 401 go to `auth_required`; sign-in lives in `mcp_oauth`.
 //!
 //! Config uses the `mcpServers` shape shared by Claude Desktop, Claude Code and
 //! OpenClaude, so existing registries import without translation.
@@ -118,12 +119,70 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
 enum Transport {
     Stdio { stdin: Mutex<ChildStdin>, child: Mutex<Child>, pending: Pending },
-    Http { url: String, headers: HashMap<String, String>, session: Mutex<Option<String>>, http: reqwest::Client },
+    Http { server: String, url: String, headers: HashMap<String, String>, session: Mutex<Option<String>>, http: reqwest::Client },
+    /// Legacy HTTP+SSE (2024-11-05): replies arrive on the GET stream, requests are POSTed.
+    Sse {
+        server: String,
+        url: String,
+        post_url: String,
+        headers: HashMap<String, String>,
+        pending: Pending,
+        http: reqwest::Client,
+        reader: tokio::task::JoinHandle<()>,
+    },
 }
 
 struct Conn {
     transport: Transport,
     next_id: AtomicU64,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        if let Transport::Sse { reader, .. } = &self.transport {
+            reader.abort();
+        }
+    }
+}
+
+/// Config headers, plus the stored OAuth bearer unless the user set Authorization themselves.
+async fn with_auth(
+    mut req: reqwest::RequestBuilder,
+    server: &str,
+    resource: &str,
+    headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+    if !headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")) {
+        if let Some(t) = crate::mcp_oauth::bearer_for_resource(server, resource).await {
+            req = req.bearer_auth(t);
+        }
+    }
+    req
+}
+
+async fn check_status(resp: reqwest::Response) -> anyhow::Result<reqwest::Response> {
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(crate::mcp_oauth::AuthRequired.into());
+    }
+    if !status.is_success() {
+        anyhow::bail!("HTTP {status}: {}", resp.text().await.unwrap_or_default().chars().take(300).collect::<String>());
+    }
+    Ok(resp)
+}
+
+async fn await_reply(pending: &Pending, id: u64, rx: oneshot::Receiver<Value>, method: &str, timeout: Duration) -> anyhow::Result<Value> {
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(_)) => anyhow::bail!("server closed before replying to {method}"),
+        Err(_) => {
+            pending.lock().await.remove(&id);
+            anyhow::bail!("{method} timed out after {}s", timeout.as_secs())
+        }
+    }
 }
 
 impl Conn {
@@ -139,14 +198,16 @@ impl Conn {
                     w.write_all(format!("{msg}\n").as_bytes()).await?;
                     w.flush().await?;
                 }
-                match tokio::time::timeout(timeout, rx).await {
-                    Ok(Ok(v)) => v,
-                    Ok(Err(_)) => anyhow::bail!("server closed before replying to {method}"),
-                    Err(_) => {
-                        pending.lock().await.remove(&id);
-                        anyhow::bail!("{method} timed out after {}s", timeout.as_secs())
-                    }
+                await_reply(pending, id, rx, method, timeout).await?
+            }
+            Transport::Sse { pending, .. } => {
+                let (tx, rx) = oneshot::channel();
+                pending.lock().await.insert(id, tx);
+                if let Err(e) = self.sse_post(&msg, timeout).await {
+                    pending.lock().await.remove(&id);
+                    return Err(e);
                 }
+                await_reply(pending, id, rx, method, timeout).await?
             }
             Transport::Http { .. } => self.http_post(&msg, Some(id), timeout).await?,
         };
@@ -167,21 +228,27 @@ impl Conn {
             Transport::Http { .. } => {
                 self.http_post(&msg, None, Duration::from_secs(15)).await?;
             }
+            Transport::Sse { .. } => self.sse_post(&msg, Duration::from_secs(15)).await?,
         }
         Ok(())
     }
 
+    async fn sse_post(&self, msg: &Value, timeout: Duration) -> anyhow::Result<()> {
+        let Transport::Sse { server, url, post_url, headers, http, .. } = &self.transport else { unreachable!() };
+        let req = with_auth(http.post(post_url).timeout(timeout).json(msg), server, url, headers).await;
+        check_status(req.send().await?).await?;
+        Ok(())
+    }
+
     async fn http_post(&self, msg: &Value, id: Option<u64>, timeout: Duration) -> anyhow::Result<Value> {
-        let Transport::Http { url, headers, session, http } = &self.transport else { unreachable!() };
+        let Transport::Http { server, url, headers, session, http } = &self.transport else { unreachable!() };
         let mut req = http
             .post(url)
             .timeout(timeout)
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", PROTOCOL_VERSION)
             .json(msg);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
+        req = with_auth(req, server, url, headers).await;
         if let Some(s) = session.lock().await.as_ref() {
             req = req.header("Mcp-Session-Id", s);
         }
@@ -189,10 +256,7 @@ impl Conn {
         if let Some(s) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
             *session.lock().await = Some(s.to_string());
         }
-        let status = resp.status();
-        if !status.is_success() {
-            anyhow::bail!("HTTP {status}: {}", resp.text().await.unwrap_or_default().chars().take(300).collect::<String>());
-        }
+        let resp = check_status(resp).await?;
         let Some(id) = id else { return Ok(Value::Null) };
         let is_sse = resp
             .headers()
@@ -345,6 +409,7 @@ async fn connect(name: &str, cfg: &ServerConfig, log: Arc<std::sync::Mutex<VecDe
         }
         "http" => Ok(Conn {
             transport: Transport::Http {
+                server: name.to_string(),
                 url: cfg.url.clone().unwrap_or_default(),
                 headers: cfg.headers.clone(),
                 session: Mutex::new(None),
@@ -352,8 +417,101 @@ async fn connect(name: &str, cfg: &ServerConfig, log: Arc<std::sync::Mutex<VecDe
             },
             next_id: AtomicU64::new(1),
         }),
-        other => anyhow::bail!("transport `{other}` is not supported yet (use stdio or streamable http)"),
+        "sse" => connect_sse(name, cfg, log).await,
+        other => anyhow::bail!("transport `{other}` is not supported"),
     }
+}
+
+/// Dispatch one SSE event: `endpoint` once, then JSON-RPC replies routed by id.
+async fn sse_event(event: &str, data: &str, ep_tx: &mut Option<oneshot::Sender<String>>, pending: &Pending) {
+    match event {
+        "endpoint" => {
+            if let Some(tx) = ep_tx.take() {
+                let _ = tx.send(data.trim().to_string());
+            }
+        }
+        "" | "message" => {
+            let Ok(v) = serde_json::from_str::<Value>(data) else { return };
+            if let (Some(id), None) = (v.get("id").and_then(Value::as_u64), v.get("method")) {
+                if let Some(tx) = pending.lock().await.remove(&id) {
+                    let _ = tx.send(v);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn connect_sse(name: &str, cfg: &ServerConfig, log: Arc<std::sync::Mutex<VecDeque<String>>>) -> anyhow::Result<Conn> {
+    let url = cfg.url.clone().ok_or_else(|| anyhow::anyhow!("no url configured"))?;
+    let base = url::Url::parse(&url)?;
+    let http = reqwest::Client::new();
+    let req = with_auth(http.get(&url).header("Accept", "text/event-stream"), name, &url, &cfg.headers).await;
+    let resp = tokio::time::timeout(Duration::from_secs(30), req.send())
+        .await
+        .map_err(|_| anyhow::anyhow!("SSE connect timed out"))??;
+    let mut resp = check_status(resp).await?;
+    let pending: Pending = Default::default();
+    let (ep_tx, ep_rx) = oneshot::channel::<String>();
+    let (p2, l2, n2) = (pending.clone(), log.clone(), name.to_string());
+    let reader = tokio::spawn(async move {
+        let mut ep_tx = Some(ep_tx);
+        let (mut buf, mut event, mut data) = (Vec::<u8>::new(), String::new(), String::new());
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            buf.extend_from_slice(&chunk);
+            while let Some(i) = buf.iter().position(|&b| b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=i).collect();
+                let line = String::from_utf8_lossy(&raw);
+                let line = line.trim_end_matches(['\n', '\r']);
+                if line.is_empty() {
+                    sse_event(&event, &data, &mut ep_tx, &p2).await;
+                    event.clear();
+                    data.clear();
+                } else if let Some(v) = line.strip_prefix("event:") {
+                    event = v.trim().to_string();
+                } else if let Some(v) = line.strip_prefix("data:") {
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(v.strip_prefix(' ').unwrap_or(v));
+                }
+            }
+            // A server that never ends a line or event must not grow memory without bound.
+            if buf.len() + data.len() > 16 << 20 {
+                push_log(&l2, format!("[{n2}] SSE event too large; closing"));
+                break;
+            }
+        }
+        p2.lock().await.clear(); // fail in-flight requests fast
+        push_log(&l2, format!("[{n2}] SSE stream closed"));
+    });
+    let ep = match tokio::time::timeout(Duration::from_secs(30), ep_rx).await {
+        Ok(Ok(e)) => e,
+        r => {
+            reader.abort();
+            anyhow::bail!("{}", if r.is_err() { "timed out waiting for SSE endpoint event" } else { "SSE stream closed before endpoint event" })
+        }
+    };
+    // The endpoint comes from the server; never POST (with credentials) to another origin.
+    let post = match base.join(&ep) {
+        Ok(p) if p.origin() == base.origin() => p,
+        _ => {
+            reader.abort();
+            anyhow::bail!("SSE endpoint is not on the server's origin ({}); refusing", base.origin().ascii_serialization())
+        }
+    };
+    Ok(Conn {
+        transport: Transport::Sse {
+            server: name.to_string(),
+            url,
+            post_url: post.to_string(),
+            headers: cfg.headers.clone(),
+            pending,
+            http,
+            reader,
+        },
+        next_id: AtomicU64::new(1),
+    })
 }
 
 async fn handshake(conn: &Conn) -> anyhow::Result<(Value, Vec<ToolDef>, usize, usize)> {
@@ -448,6 +606,10 @@ impl McpManager {
                 srv.tools = tools;
                 srv.resources = resources;
                 srv.prompts = prompts;
+            }
+            Err(e) if e.downcast_ref::<crate::mcp_oauth::AuthRequired>().is_some() => {
+                srv.state = "auth_required".into();
+                srv.error = Some("Sign-in required".into());
             }
             Err(e) => {
                 srv.state = "error".into();
@@ -625,5 +787,75 @@ for line in sys.stdin:
         assert_eq!(text, "echo:hi");
         assert!(!err);
         m.stop_all().await;
+    }
+
+    /// Legacy SSE server: endpoint event on GET, replies as `message` events on the stream.
+    async fn sse_mock(endpoint: &'static str) -> u16 {
+        use crate::mcp_oauth::tests::{Req, Resp, mock, resp};
+        let tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>> = Default::default();
+        mock(Arc::new(move |r: Req| match (r.method.as_str(), r.path.as_str()) {
+            ("GET", "/sse") => {
+                assert!(r.headers["accept"].contains("text/event-stream"));
+                let (t, rx) = tokio::sync::mpsc::unbounded_channel();
+                t.send(format!(": hello\r\n\r\nevent: endpoint\r\ndata: {endpoint}\r\n\r\n")).unwrap();
+                *tx.lock().unwrap() = Some(t);
+                Resp::Stream(rx)
+            }
+            ("POST", "/messages") if r.query.get("sessionId").map(String::as_str) == Some("abc") => {
+                let m: Value = serde_json::from_str(&r.body).unwrap();
+                let Some(id) = m.get("id").cloned() else { return resp(202, "text/plain", "Accepted") };
+                let result = match m["method"].as_str() {
+                    Some("initialize") => json!({"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "legacy"}}),
+                    Some("tools/list") => json!({"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}),
+                    Some("tools/call") => json!({"content": [{"type": "text", "text": format!("sse:{}", m["params"]["arguments"]["text"].as_str().unwrap_or(""))}]}),
+                    _ => json!({}),
+                };
+                let out = json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+                let (a, b) = out.split_at(out.len() / 2);
+                let g = tx.lock().unwrap();
+                let t = g.as_ref().unwrap();
+                // A server notification first, then a reply split across writes.
+                t.send("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n\n".into()).unwrap();
+                t.send(format!("event: message\ndata: {a}")).unwrap();
+                t.send(format!("{b}\n\n")).unwrap();
+                resp(202, "text/plain", "Accepted")
+            }
+            _ => resp(404, "text/plain", ""),
+        }))
+        .await
+    }
+
+    fn sse_manager_cfg(port: u16) -> McpConfig {
+        let mut cfg = McpConfig::default();
+        cfg.servers.insert(
+            "legacy".into(),
+            ServerConfig { kind: Some("sse".into()), url: Some(format!("http://127.0.0.1:{port}/sse")), ..Default::default() },
+        );
+        cfg
+    }
+
+    #[tokio::test]
+    async fn sse_roundtrip() {
+        let port = sse_mock("/messages?sessionId=abc").await;
+        let m = McpManager::default();
+        m.set_config(&sse_manager_cfg(port)).await;
+        m.start_all().await;
+        let st = m.statuses().await;
+        assert_eq!((st[0].transport.as_str(), st[0].state.as_str()), ("sse", "connected"), "{:?}", st[0].error);
+        assert_eq!(st[0].tools.len(), 1);
+        let (text, _, _) = m.call("legacy", "echo", json!({"text": "hi"})).await.unwrap();
+        assert_eq!(text, "sse:hi");
+        m.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn sse_rejects_cross_origin_endpoint() {
+        let port = sse_mock("http://localhost:1/messages?sessionId=abc").await;
+        let m = McpManager::default();
+        m.set_config(&sse_manager_cfg(port)).await;
+        m.start_all().await;
+        let st = m.statuses().await;
+        assert_eq!(st[0].state, "error");
+        assert!(st[0].error.as_deref().unwrap_or("").contains("origin"), "{:?}", st[0].error);
     }
 }

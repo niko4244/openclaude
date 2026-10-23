@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 
@@ -80,10 +81,12 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
   const [tools, setTools] = useState(true);
   const [hotkey, setHotkey] = useState("");
   const [tray, setTray] = useState(true);
+  const [login, setLogin] = useState(false);
   useEffect(() => {
     void api.getSetting("system_prompt").then((v) => setSys(v || ""));
     void api.getSetting("tools_enabled").then((v) => setTools(v !== "false"));
     void api.getSetting("close_to_tray").then((v) => setTray(v !== "false"));
+    void autostartEnabled().then(setLogin).catch(() => setLogin(false));
     void api.getSetting("quick_entry_shortcut").then((v) => setHotkey(v ?? "CommandOrControl+Alt+Space"));
   }, []);
   return (
@@ -114,8 +117,17 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
       </div>
       <div className="field">
         <label><input type="checkbox" checked={tray} onChange={async (e) => { setTray(e.target.checked); await api.setSetting("close_to_tray", String(e.target.checked)); }} /> Keep running in the system tray when the window is closed</label>
-        <span className="help">Keeps connectors and background agents alive. Quit from the tray icon or File, Quit.</span>
+        <span className="help">Keeps connectors and background agents alive. Quit from the tray icon or the app menu.</span>
       </div>
+      <div className="field">
+        <label><input type="checkbox" checked={login} onChange={async (e) => {
+          try { if (e.target.checked) await enableAutostart(); else await disableAutostart(); setLogin(await autostartEnabled()); }
+          catch (err) { toast(`Could not change run-on-login: ${err}`); }
+        }} /> Start OpenClaude when you sign in to Windows</label>
+        <span className="help">Starts minimized to the tray so scheduled tasks can run.</span>
+      </div>
+      <SttField toast={toast} />
+      <ComputerUseField />
       <div className="field">
         <label htmlFor="hk">Quick entry shortcut</label>
         <input id="hk" value={hotkey} onChange={(e) => setHotkey(e.target.value)} placeholder="CommandOrControl+Alt+Space" />
@@ -238,6 +250,7 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
   const [form, setForm] = useState({ name: "", command: "", args: "", url: "", env: "" });
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [signing, setSigning] = useState<string | null>(null);
   const refresh = async () => setServers(await api.mcpStatus());
   useEffect(() => {
     void refresh();
@@ -255,7 +268,7 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
       if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
     }
     const cfg: ServerConfig = form.url.trim()
-      ? { type: "http", url: form.url.trim() }
+      ? { type: /\/sse\/?$/.test(form.url.trim()) ? "sse" : "http", url: form.url.trim() }
       : { command: form.command.trim(), args: form.args.trim() ? form.args.match(/(?:[^\s"]+|"[^"]*")+/g)!.map((a) => a.replace(/^"|"$/g, "")) : [], env };
     if (!cfg.url && !cfg.command) return setErr("Enter a command (stdio) or a URL (HTTP).");
     try {
@@ -272,12 +285,21 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
       {servers.map((s) => (
         <div className="card" key={s.name}>
           <div className="card-head">
-            <span className={`dot ${s.state === "connected" ? "ok" : s.state === "connecting" ? "warn" : s.state === "error" ? "err" : ""}`} />
+            <span className={`dot ${s.state === "connected" ? "ok" : s.state === "connecting" || s.state === "auth_required" ? "warn" : s.state === "error" ? "err" : ""}`} />
             <span className="name">{s.name}</span>
             <span className="badge">{s.transport}</span>
             <span className="muted">{s.state}{s.server_info?.name ? ` · ${s.server_info.name} ${s.server_info.version ?? ""}` : ""}</span>
             <span className="spacer" />
             <button className="btn" onClick={() => setOpen(open === s.name ? null : s.name)}>{open === s.name ? "Hide" : "Details"}</button>
+            {s.state === "auth_required" && (
+              <button className="btn primary" disabled={signing === s.name} onClick={async () => {
+                setSigning(s.name);
+                try { await api.mcpAuthorize(s.name); toast(`Signed in to ${s.name}`); } catch (err) { toast(String(err)); } finally { setSigning(null); await refresh(); }
+              }}>{signing === s.name ? "Waiting for browser sign-in…" : "Sign in"}</button>
+            )}
+            {(s.transport === "http" || s.transport === "sse") && s.state === "connected" && (
+              <button className="btn" onClick={async () => { await api.mcpSignOut(s.name); await refresh(); }}>Sign out</button>
+            )}
             <button className="btn" onClick={async () => { await api.mcpRestart(s.name); await refresh(); }}>Restart</button>
             <button className="btn danger" onClick={async () => { await api.mcpRemoveServer(s.name); await refresh(); }}>Remove</button>
           </div>
@@ -456,5 +478,31 @@ function Extensions({ toast }: { toast: (m: string) => void }) {
         </div>
       )}
     </>
+  );
+}
+
+function SttField({ toast }: { toast: (m: string) => void }) {
+  const [v, setV] = useState("");
+  useEffect(() => { void api.getSetting("stt_model").then((x) => setV(x || "")); }, []);
+  return (
+    <div className="field">
+      <label htmlFor="stt">Dictation model</label>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input id="stt" style={{ flex: 1 }} value={v} onChange={(e) => setV(e.target.value)} placeholder="empty = local faster-whisper (e.g. whisper-1 on your gateway)" />
+        <button className="btn" onClick={async () => { await api.setSetting("stt_model", v.trim()); toast("Dictation model saved"); }}>Save</button>
+      </div>
+      <span className="help">A speech-to-text model alias on your LiteLLM gateway. Leave empty to transcribe locally with faster-whisper (Python); the first use downloads the Whisper model.</span>
+    </div>
+  );
+}
+
+function ComputerUseField() {
+  const [on, setOn] = useState(false);
+  useEffect(() => { void api.getSetting("computer_use_enabled").then((v) => setOn(v === "true")); }, []);
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("computer_use_enabled", String(e.target.checked)); }} /> Computer use (experimental)</label>
+      <span className="help">Lets the model see your primary screen and control the mouse and keyboard. Every action asks for approval (at most “for this chat”, never permanently); background tasks can never use it; locking the screen and Ctrl+Alt+Delete are always blocked. Needs a vision-capable model. Press Esc to stop.</span>
+    </div>
   );
 }

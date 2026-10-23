@@ -96,7 +96,7 @@ export type ToolDef = { name: string; description: string | null; inputSchema: u
 export type ServerStatus = {
   name: string;
   transport: string;
-  state: "connected" | "connecting" | "error" | "stopped" | "disabled";
+  state: "connected" | "connecting" | "error" | "stopped" | "disabled" | "auth_required";
   error: string | null;
   server_info: { name?: string; version?: string } | null;
   tools: ToolDef[];
@@ -205,6 +205,8 @@ export const api = {
   mcpSaveServer: (name: string, config: ServerConfig) => invoke<void>("mcp_save_server", { name, config }),
   mcpRemoveServer: (name: string) => invoke<void>("mcp_remove_server", { name }),
   mcpRestart: (name: string) => invoke<void>("mcp_restart", { name }),
+  mcpAuthorize: (name: string) => invoke<void>("mcp_authorize", { name }),
+  mcpSignOut: (name: string) => invoke<void>("mcp_sign_out", { name }),
   mcpImportCandidates: () => invoke<ImportCandidate[]>("mcp_import_candidates"),
   mcpImport: (path: string, names: string[]) => invoke<number>("mcp_import", { path, names }),
 

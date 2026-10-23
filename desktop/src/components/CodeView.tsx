@@ -22,6 +22,7 @@ type AgentRecord = {
   is_error?: boolean;
 };
 type GitStatus = { is_repo: boolean; branch: string | null; files: [string, string][]; error: string | null };
+type Worktree = { path: string; branch: string | null; head: string };
 type Entry = { kind: "user" | "text" | "tool" | "result" | "system" | "log"; text: string; title?: string; err?: boolean };
 
 const MODES: [string, string][] = [
@@ -50,6 +51,9 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
   const [err, setErr] = useState<string | null>(null);
   const [termOpen, setTermOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const [wts, setWts] = useState<Worktree[]>([]);
+  const [wtBranch, setWtBranch] = useState("");
+  const [wtErr, setWtErr] = useState<string | null>(null);
 
   const [recent, setRecent] = useState<string[]>([]);
   useEffect(() => { void invoke<string[]>("list_workspaces").then((ws) => setRecent(ws.reverse())); }, [cwd]);
@@ -65,6 +69,31 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
     const t = setInterval(() => void refreshGit(), 5000);
     return () => clearInterval(t);
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshWts = async (dir = cwd) => {
+    if (!dir) return setWts([]);
+    setWts(await invoke<Worktree[]>("worktree_list", { cwd: dir }).catch(() => []));
+  };
+  useEffect(() => { void refreshWts(); }, [cwd, git?.is_repo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const wtAdd = async () => {
+    if (!cwd || !wtBranch.trim()) return;
+    setWtErr(null);
+    try {
+      const p = await invoke<string>("worktree_add", { cwd, branch: wtBranch.trim() });
+      setWtBranch("");
+      await refreshWts();
+      setCwd(p);
+      setDiff(null);
+    } catch (e) { setWtErr(String(e)); }
+  };
+  const wtRemove = async (path: string) => {
+    if (!cwd || !confirm(`Remove worktree ${path}? (git refuses if it has uncommitted changes)`)) return;
+    setWtErr(null);
+    try {
+      await invoke("worktree_remove", { cwd, path });
+      await refreshWts();
+    } catch (e) { setWtErr(String(e)); }
+  };
 
   const push = (e: Entry) => setEntries((xs) => [...xs, e]);
 
@@ -192,6 +221,26 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
             </div>
           )}
         </div>
+        {git?.is_repo && (
+          <div style={{ borderTop: "1px solid var(--border)", padding: 8 }} aria-label="Worktrees">
+            <div className="section-label" style={{ padding: "0 0 4px" }}>Worktrees</div>
+            {wts.map((w, i) => {
+              const here = cwd !== null && w.path.split("\\").join("/").toLowerCase() === cwd.split("\\").join("/").toLowerCase();
+              return (
+                <div key={w.path} style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 0" }}>
+                  <span className="mono" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={w.path}>{here ? "● " : ""}{w.branch ?? `(detached ${w.head.slice(0, 7)})`}{i === 0 ? " · main" : ""}</span>
+                  <button className="btn" disabled={here} onClick={() => { setCwd(w.path); setDiff(null); }}>Open</button>
+                  {i > 0 && <button className="btn danger" onClick={() => void wtRemove(w.path)}>Remove</button>}
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+              <input value={wtBranch} aria-label="New worktree branch" placeholder="new-branch-name" onChange={(e) => setWtBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void wtAdd(); }} style={{ flex: 1, minWidth: 0 }} />
+              <button className="btn" disabled={!wtBranch.trim()} onClick={() => void wtAdd()}>New worktree</button>
+            </div>
+            {wtErr && <div className="error-box" style={{ marginTop: 4 }}>{wtErr}</div>}
+          </div>
+        )}
       </aside>
     </div>
   );

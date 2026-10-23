@@ -59,7 +59,11 @@ pub fn to_wire(system: &str, history: &[Message]) -> Vec<Value> {
     if !system.trim().is_empty() {
         out.push(json!({"role": "system", "content": system}));
     }
-    for m in history {
+    // Tool messages can't carry images on OpenAI-style APIs; screenshots from the latest
+    // tool run are sent right after it as one user message (older ones are dropped).
+    let last_tool = history.iter().rposition(|m| m.role == "tool");
+    let mut run_images: Vec<Value> = vec![];
+    for (i, m) in history.iter().enumerate() {
         match m.role.as_str() {
             "user" => out.push(json!({"role": "user", "content": m.content})),
             "assistant" => {
@@ -79,7 +83,21 @@ pub fn to_wire(system: &str, history: &[Message]) -> Vec<Value> {
                 }
                 out.push(v);
             }
-            "tool" => out.push(json!({"role": "tool", "tool_call_id": m.tool_call_id, "content": text_of(&m.content)})),
+            "tool" => {
+                out.push(json!({"role": "tool", "tool_call_id": m.tool_call_id, "content": text_of(&m.content)}));
+                if let Value::Array(parts) = &m.content {
+                    run_images.extend(parts.iter().filter(|p| p["type"] == "image_url").cloned());
+                }
+                let run_ends = history.get(i + 1).is_none_or(|n| n.role != "tool");
+                if run_ends {
+                    if Some(i) == last_tool && !run_images.is_empty() {
+                        let mut parts = vec![json!({"type": "text", "text": "Screen after the last computer action:"})];
+                        parts.append(&mut run_images);
+                        out.push(json!({"role": "user", "content": parts}));
+                    }
+                    run_images.clear();
+                }
+            }
             _ => {}
         }
     }
@@ -224,7 +242,11 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
     };
     let tools: Vec<Value> = if tools_enabled && model_allows_tools {
         let allowed: Vec<String> = state.mcp.statuses().await.into_iter().map(|s| s.name).filter(|n| !disabled.contains(n)).collect();
-        state.mcp.openai_tools(Some(&allowed)).await
+        let mut tools = state.mcp.openai_tools(Some(&allowed)).await;
+        if state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() == Some("true") {
+            tools.extend(crate::computer::tool_defs());
+        }
+        tools
     } else {
         vec![]
     };
@@ -302,16 +324,19 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         }
 
         for call in calls {
-            let (text, is_error) = match execute_tool(state, run, cid, &call, ch).await {
+            let (text, is_error, image) = match execute_tool(state, run, cid, &call, ch).await {
                 ToolOutcome::Cancelled => return Ok(true),
-                ToolOutcome::Done(t, e) => (t, e),
+                ToolOutcome::Done(t, e, img) => (t, e, img),
             };
             let mut tm = Message {
                 conversation_id: cid.clone(),
                 role: "tool".into(),
                 tool_call_id: Some(call.id.clone()),
                 name: Some(call.name.clone()),
-                content: Value::String(text),
+                content: match image {
+                    Some(url) => json!([{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": url}}]),
+                    None => Value::String(text),
+                },
                 status: if is_error { "error".into() } else { "complete".into() },
                 ..Default::default()
             };
@@ -381,29 +406,45 @@ async fn summary_for(state: &Arc<AppState>, gw: &crate::gateway::Gateway, model:
 }
 
 enum ToolOutcome {
-    Done(String, bool),
+    /// (model-facing text, is_error, optional screenshot data URL)
+    Done(String, bool, Option<String>),
     Cancelled,
 }
 
 async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCall, ch: &Sink) -> ToolOutcome {
-    let Some((server, tool)) = state.mcp.resolve(&call.name).await else {
-        return ToolOutcome::Done(format!("Unknown tool `{}`.", call.name), true);
+    // Computer use: built-in tools, never via MCP, never in background runs.
+    let is_computer = call.name.starts_with("computer__");
+    if is_computer && !ch.interactive {
+        return ToolOutcome::Done("Computer use requires an interactive chat.".into(), true, None);
+    }
+    if is_computer && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
+        return ToolOutcome::Done("Computer use is disabled in Settings.".into(), true, None);
+    }
+    let (server, tool) = if is_computer {
+        ("computer".to_string(), call.name.trim_start_matches("computer__").to_string())
+    } else {
+        match state.mcp.resolve(&call.name).await {
+            Some(t) => t,
+            None => return ToolOutcome::Done(format!("Unknown tool `{}`.", call.name), true, None),
+        }
     };
     let args: Value = match serde_json::from_str(if call.arguments.trim().is_empty() { "{}" } else { &call.arguments }) {
         Ok(v) => v,
-        Err(e) => return ToolOutcome::Done(format!("Invalid JSON arguments: {e}"), true),
+        Err(e) => return ToolOutcome::Done(format!("Invalid JSON arguments: {e}"), true, None),
     };
     let policy_key = format!("tool_policy:{}", call.name);
     let policy = state.db.lock().unwrap().get_setting(&policy_key);
     if policy.as_deref() == Some("block") {
-        return ToolOutcome::Done("This tool is blocked by the user's settings.".into(), true);
+        return ToolOutcome::Done("This tool is blocked by the user's settings.".into(), true, None);
     }
     let chat_key = (cid.to_string(), call.name.clone());
-    let always = policy.as_deref() == Some("allow") || state.chat_allows.lock().unwrap().contains(&chat_key);
+    // Screen control is never permanently pre-approved: at most for the current chat.
+    let always = (policy.as_deref() == Some("allow") && !is_computer) || state.chat_allows.lock().unwrap().contains(&chat_key);
     if !always && !ch.interactive {
         return ToolOutcome::Done(
             "This tool needs approval, which is not possible in a background task. Set it to \"Always allow\" in Settings to use it in tasks.".into(),
             true,
+            None,
         );
     }
     if !always {
@@ -417,22 +458,31 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
         };
         match decision {
             Some((true, scope)) => match scope.as_str() {
-                "always" => {
+                "always" if !is_computer => {
                     let _ = state.db.lock().unwrap().set_setting(&policy_key, "allow");
                 }
-                "chat" => {
+                "chat" | "always" => {
                     state.chat_allows.lock().unwrap().insert(chat_key);
                 }
                 _ => {}
             },
-            _ => return ToolOutcome::Done("The user denied this tool call.".into(), true),
+            _ => return ToolOutcome::Done("The user denied this tool call.".into(), true, None),
         }
+    }
+    if is_computer {
+        return tokio::select! {
+            r = crate::computer::execute(&call.name, &args) => match r {
+                Ok(o) => ToolOutcome::Done(o.text, false, o.image_data_url),
+                Err(e) => ToolOutcome::Done(format!("Computer error: {e}"), true, None),
+            },
+            _ = run.cancel.notified() => ToolOutcome::Cancelled,
+        };
     }
     let fut = state.mcp.call(&server, &tool, args);
     tokio::select! {
         r = fut => match r {
-            Ok((text, _raw, is_error)) => ToolOutcome::Done(cap(text), is_error),
-            Err(e) => ToolOutcome::Done(format!("Tool error: {e}"), true),
+            Ok((text, _raw, is_error)) => ToolOutcome::Done(cap(text), is_error, None),
+            Err(e) => ToolOutcome::Done(format!("Tool error: {e}"), true, None),
         },
         _ = run.cancel.notified() => ToolOutcome::Cancelled,
     }
@@ -484,6 +534,27 @@ mod tests {
         assert_eq!(h[cut].role, "user");
         let kept: usize = h[cut..].iter().map(approx_tokens).sum();
         assert!(kept <= 1_000 + 120, "recent part stays within half the budget");
+    }
+
+    #[test]
+    fn screenshots_follow_only_the_latest_tool_run() {
+        let img = |u: &str| json!([{"type": "text", "text": "shot"}, {"type": "image_url", "image_url": {"url": u}}]);
+        let mut a1 = m("assistant", "");
+        a1.tool_calls = Some(json!([{"id": "c1", "name": "computer__screenshot", "arguments": "{}"}]));
+        let mut t1 = m("tool", "");
+        t1.tool_call_id = Some("c1".into());
+        t1.content = img("data:old");
+        let mut a2 = m("assistant", "");
+        a2.tool_calls = Some(json!([{"id": "c2", "name": "computer__click", "arguments": "{}"}]));
+        let mut t2 = m("tool", "");
+        t2.tool_call_id = Some("c2".into());
+        t2.content = img("data:new");
+        let w = to_wire("", &[m("user", "go"), a1, t1, a2, t2]);
+        let roles: Vec<&str> = w.iter().map(|x| x["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "tool", "user"]);
+        assert_eq!(w[2]["content"], "shot", "tool message carries text only");
+        let last = w.last().unwrap().to_string();
+        assert!(last.contains("data:new") && !last.contains("data:old"));
     }
 
     #[test]

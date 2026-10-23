@@ -304,6 +304,12 @@ try {
   record("code terminal runs in workspace", termOk && termText.includes("new-file.txt"), termText.split("\n").slice(-4).join(" | "));
   const gitPanel = await p2.locator('.artifact-panel .nav-item:has-text("new-file.txt")').count();
   record("code tab shows git status", gitPanel > 0);
+  // worktree: create from the UI; the new worktree must be listed and opened (granted)
+  await p2.fill('[aria-label="New worktree branch"]', "e2e-wt");
+  await p2.click('button:has-text("New worktree")');
+  const wtOk = await p2.waitForSelector('[aria-label="Worktrees"] :text("e2e-wt")', { timeout: 20000 }).then(() => true, () => false);
+  const switched = await p2.waitForFunction(() => /e2e-wt/.test(document.body.innerText), null, { timeout: 5000 }).then(() => true, () => false);
+  record("git worktree created from Code tab", wtOk && switched);
   await p2.screenshot({ path: join(out, "10-code-terminal.png") });
 
   // 14. project knowledge reaches the model

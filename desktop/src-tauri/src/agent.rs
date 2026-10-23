@@ -259,6 +259,132 @@ pub async fn git_diff(cwd: &Path, path: Option<&str>) -> anyhow::Result<String> 
     Ok(if d.len() > 400_000 { format!("{}\n…[diff truncated]", &d[..d.floor_char_boundary(400_000)]) } else { d })
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Worktree {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head: String,
+}
+
+fn norm_path(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s.strip_prefix("//?/").unwrap_or(&s).trim_end_matches('/').to_string();
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    norm_path(a) == norm_path(b)
+        || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if norm_path(&x) == norm_path(&y))
+}
+
+fn parse_worktrees(porcelain: &str) -> Vec<Worktree> {
+    let mut out = Vec::new();
+    for block in porcelain.split("\n\n") {
+        let mut w = Worktree { path: String::new(), branch: None, head: String::new() };
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                w.path = p.trim_end_matches('\r').to_string();
+            } else if let Some(h) = line.strip_prefix("HEAD ") {
+                w.head = h.trim().to_string();
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                w.branch = Some(b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim()).to_string());
+            }
+        }
+        if !w.path.is_empty() {
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// All worktrees of the repo; the first entry is the main worktree.
+pub async fn worktrees(repo: &Path) -> anyhow::Result<Vec<Worktree>> {
+    Ok(parse_worktrees(&git(repo, &["worktree", "list", "--porcelain"]).await?))
+}
+
+/// Create a worktree for `branch` (new branch, or the existing one) at `<main>-wt/<branch with / -> ->`.
+pub async fn worktree_add(repo: &Path, branch: &str) -> anyhow::Result<PathBuf> {
+    let b = branch.trim();
+    if b.is_empty() || b.starts_with('-') || b.starts_with('@') || b.contains("@{") {
+        anyhow::bail!("invalid branch name");
+    }
+    git(repo, &["check-ref-format", "--branch", b]).await.map_err(|_| anyhow::anyhow!("invalid branch name: {b}"))?;
+    let main = worktrees(repo).await?.into_iter().next().ok_or_else(|| anyhow::anyhow!("not a git repository"))?;
+    let main = PathBuf::from(main.path);
+    let name = main.file_name().ok_or_else(|| anyhow::anyhow!("bad repo path"))?.to_string_lossy().to_string();
+    let dir = main.parent().ok_or_else(|| anyhow::anyhow!("bad repo path"))?.join(format!("{name}-wt")).join(b.replace('/', "-"));
+    if dir.exists() {
+        anyhow::bail!("{} already exists", dir.display());
+    }
+    tokio::fs::create_dir_all(dir.parent().unwrap()).await?;
+    let p = dir.to_string_lossy().to_string();
+    let exists = git(repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")]).await.is_ok();
+    if exists {
+        git(repo, &["worktree", "add", &p, b]).await?;
+    } else {
+        git(repo, &["worktree", "add", "-b", b, &p]).await?;
+    }
+    Ok(dir)
+}
+
+/// Remove a linked worktree (never the main one, never an unknown path). No --force: git refuses if dirty.
+pub async fn worktree_remove(repo: &Path, path: &Path) -> anyhow::Result<()> {
+    let wts = worktrees(repo).await?;
+    let target = wts.iter().skip(1).find(|w| same_path(Path::new(&w.path), path)).ok_or_else(|| anyhow::anyhow!("not a linked worktree of this repository"))?;
+    git(repo, &["worktree", "remove", &target.path]).await?;
+    Ok(())
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+        } else if it.peek() == Some(&'[') {
+            it.next();
+            for d in it.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&d) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Only http(s) on localhost / 127.0.0.1 / ::1 with an explicit port, no credentials.
+pub fn is_local_preview_url(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else { return false };
+    if !matches!(u.scheme(), "http" | "https") || u.port().is_none() || !u.username().is_empty() || u.password().is_some() {
+        return false;
+    }
+    match u.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    }
+}
+
+/// First local dev-server URL in a line of output (Vite / Next / CRA style), ANSI stripped.
+pub fn detect_dev_url(line: &str) -> Option<String> {
+    let clean = strip_ansi(line);
+    let mut rest = clean.as_str();
+    while let Some(i) = rest.find("http") {
+        let cand = &rest[i..];
+        if cand.starts_with("http://") || cand.starts_with("https://") {
+            let end = cand.find(|c: char| c.is_whitespace() || "\"'<>)\\`".contains(c)).unwrap_or(cand.len());
+            let url = cand[..end].trim_end_matches(['.', ',', ';', ':']);
+            if is_local_preview_url(url) {
+                return Some(url.to_string());
+            }
+        }
+        rest = &rest[i + 4..];
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +427,84 @@ mod tests {
         assert!(st.is_repo, "{:?}", st.error);
         assert!(st.branch.is_some());
         assert!(git_diff(Path::new("."), Some("../etc")).await.is_err());
+    }
+
+    async fn temp_repo() -> (tempfile::TempDir, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("proj");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"]).await.unwrap();
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]).await.unwrap();
+        (t, repo)
+    }
+
+    #[tokio::test]
+    async fn worktree_add_list_remove() {
+        let (_t, repo) = temp_repo().await;
+        let p = worktree_add(&repo, "feat/x").await.unwrap();
+        assert!(p.ends_with("feat-x") && p.exists(), "{p:?}");
+        assert!(p.parent().unwrap().ends_with("proj-wt"));
+        let l = worktrees(&repo).await.unwrap();
+        assert_eq!(l.len(), 2);
+        let w = l.iter().find(|w| same_path(Path::new(&w.path), &p)).expect("listed");
+        assert_eq!(w.branch.as_deref(), Some("feat/x"));
+        assert_eq!(w.head.len(), 40);
+        // from inside the linked worktree the layout is still derived from the main one
+        assert!(worktree_add(&p, "other").await.unwrap().parent().unwrap().ends_with("proj-wt"));
+        worktree_remove(&repo, &p).await.unwrap();
+        assert!(!p.exists());
+        // branch survives removal: re-adding uses the existing branch
+        let p2 = worktree_add(&repo, "feat/x").await.unwrap();
+        assert!(p2.exists());
+    }
+
+    #[tokio::test]
+    async fn worktree_rejects_bad_names_and_paths() {
+        let (_t, repo) = temp_repo().await;
+        for bad in ["", "-bad", "--force", "a..b", "has space", "x.lock", "@{-1}", "a~b"] {
+            assert!(worktree_add(&repo, bad).await.is_err(), "{bad:?}");
+        }
+        assert!(worktree_remove(&repo, &repo).await.is_err(), "main worktree");
+        assert!(worktree_remove(&repo, repo.parent().unwrap()).await.is_err(), "unknown path");
+    }
+
+    #[tokio::test]
+    async fn worktree_remove_dirty_surfaces_git_error() {
+        let (_t, repo) = temp_repo().await;
+        let p = worktree_add(&repo, "dirty").await.unwrap();
+        std::fs::write(p.join("scratch.txt"), "x").unwrap();
+        assert!(worktree_remove(&repo, &p).await.is_err());
+        assert!(p.exists());
+    }
+
+    #[test]
+    fn detects_dev_urls() {
+        // Vite (with ANSI, bold port inside the URL)
+        assert_eq!(detect_dev_url("  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m").as_deref(), Some("http://localhost:5173/"));
+        assert_eq!(detect_dev_url("  ➜  Local:   http://localhost:5173/").as_deref(), Some("http://localhost:5173/"));
+        // Next
+        assert_eq!(detect_dev_url("   - Local:        http://localhost:3000").as_deref(), Some("http://localhost:3000"));
+        // CRA
+        assert_eq!(detect_dev_url("  Local:            http://localhost:3000").as_deref(), Some("http://localhost:3000"));
+        assert_eq!(detect_dev_url("Server listening on http://127.0.0.1:8080.").as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(detect_dev_url("ready at http://[::1]:4321/").as_deref(), Some("http://[::1]:4321/"));
+        // remote first, local second -> local; remote only -> none
+        assert_eq!(detect_dev_url("Network: http://192.168.1.5:5173/ Local: https://localhost:8443/x").as_deref(), Some("https://localhost:8443/x"));
+        assert_eq!(detect_dev_url("  ➜  Network: http://192.168.1.5:5173/"), None);
+        assert_eq!(detect_dev_url("see https://example.com:3000/ or http://localhost/"), None);
+        assert_eq!(detect_dev_url("compiled successfully"), None);
+    }
+
+    #[test]
+    fn preview_url_is_local_only() {
+        for ok in ["http://localhost:5173", "https://127.0.0.1:3000/a?b=1", "http://[::1]:8080/", "http://LOCALHOST:3000"] {
+            assert!(is_local_preview_url(ok), "{ok}");
+        }
+        for bad in [
+            "http://example.com:3000", "http://localhost.evil.com:3000", "http://127.0.0.1.evil.com:80", "http://localhost@evil.com:3000",
+            "http://user:pw@localhost:3000", "http://localhost", "ftp://localhost:21", "file:///C:/x", "javascript:alert(1)", "http://192.168.1.2:3000", "http://0.0.0.0:3000", "", "localhost:3000",
+        ] {
+            assert!(!is_local_preview_url(bad), "{bad}");
+        }
     }
 }

@@ -1,8 +1,8 @@
 # OpenClaude Desktop: release readiness
 
 Updated: 2026-10-23 (tranches T1–T8) · Branch: `feat/desktop-2.0` · PR: niko4244/openclaude#1
-**Verdict: strong developer preview.** 13 of 25 parity rows are operational, 7 partial, 3 missing (computer use, voice, browser
-extension) and 2 not planned (cloud sync, Office/BLE surfaces). See `docs/parity/FEATURE_MATRIX.md` and `docs/parity/GOAL.md`.
+**Verdict: strong developer preview.** 14 of 25 parity rows operational, 9 partial (computer use, voice and remote-MCP OAuth are implemented and
+unit/mock-verified but not exercised live), 1 missing (browser extension), 2 not planned. See `docs/parity/FEATURE_MATRIX.md`.
 
 ## Build artifacts
 
@@ -18,7 +18,7 @@ Authenticode-signed, so SmartScreen will warn.
 
 ## Evidence
 
-### Real-desktop E2E on the packaged exe (`desktop/e2e/desktop.e2e.mjs`): 30/30 pass (cold start 0.8–3.0 s, warm 0.6–1.3 s across runs)
+### Real-desktop E2E on the packaged exe (`desktop/e2e/desktop.e2e.mjs`): 31/31 pass (cold start 0.8–3.0 s, warm 0.6–1.3 s across runs)
 These run against the live LiteLLM gateway with `qwen-local`, using an isolated profile and two launches:
 
 - **Startup and catalog:** cold and warm start; gateway status; live catalog (124 models).
@@ -33,7 +33,7 @@ These run against the live LiteLLM gateway with `qwen-local`, using an isolated 
 ### Artifact isolation (`desktop/e2e/artifact-isolation.e2e.mjs`): 4/4
 A hostile artifact cannot invoke commands, reach `window.parent`, or fetch `ipc.localhost`.
 
-### Rust (`cargo test --lib`): 26 pass, 2 live tests ignored by default
+### Rust (`cargo test --lib`): 53 pass, 3 ignored (live gateway, live probe, local Whisper download)
 Coverage includes:
 - **Gateway and chat:** gateway normalization and tool-call merging; orphan tool-call repair; context compaction cut selection.
 - **Storage:** SQLite migrations v1–v4; branch switching.
@@ -47,14 +47,11 @@ Coverage includes:
 - Most cloud aliases on this gateway currently fail upstream on credits, quota or 404s. That is the provider accounts, not the app.
 
 ## Known gaps
+- **Built but not verified live:** computer use (no vision model on this gateway), dictation (no microphone in automated runs), and remote MCP OAuth/SSE (mock servers only).
 - **Not built yet:**
-  - Computer use and voice.
-  - Remote MCP OAuth and the legacy SSE transport.
   - Extension signature verification and an extension directory.
-  - PDF knowledge extraction.
   - A Cowork-style VM and spaces.
-  - Code-tab worktrees and a preview browser.
-  - Run-on-login.
+  - Interactive per-command approval for the Code-tab CLI agent.
 - **Release prerequisites:** a first published release and code signing.
 - **Platform:** the menu lives in the frameless title bar (no Win32 menu bar). Keyboard shortcuts are handled in the webview.
 - **Attachments:** implemented through the native picker and drag-drop, but not automated in E2E because native dialogs can't be driven over CDP.

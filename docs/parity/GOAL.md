@@ -22,7 +22,7 @@ update, and a commit pushed to the PR branch. No check-ins between tranches. Nik
 | T6 | Extensions: `.mcpb`/`.dxt` install (manifest, user_config, signatures shown), extension directory UI | 9 | ✅ install path (Rust E2E, real bundle); ⏳ signature verification, directory |
 | T7 | Tasks/Cowork-lite: background task runner, folder grants, scheduled runs, task history, approvals inbox | 17 | ✅ scheduled and background tasks; ⏳ Cowork-style spaces |
 | T8 | Release: auto-update (Tauri updater, signed manifests on the fork's releases), code signing hook, perf budget (cold start under 3 s, idle memory), accessibility pass | 20 + release | ✅ signed updater + release script, deep links, window state; ⏳ first published release, code signing |
-| T9 | Stretch: voice (local STT through the gateway or Whisper), computer use (approval-gated), deep links, remote MCP OAuth | 8, 18, 19, 23 | E2E where automatable |
+| T9 | Stretch: voice (local STT through the gateway or Whisper), computer use (approval-gated), deep links, remote MCP OAuth | 8, 18, 19, 23 | ✅ deep links (E2E); ✅ MCP OAuth + SSE (mock-verified); ✅ computer use + dictation implemented (unit/mock-verified; live E2E needs a vision model and a mic) |
 
 ## Reference baseline
 

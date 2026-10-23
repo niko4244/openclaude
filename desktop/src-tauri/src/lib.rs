@@ -1,5 +1,9 @@
 mod agent;
 mod chat;
+mod computer;
+mod mcp_oauth;
+mod pdf;
+mod voice;
 mod db;
 mod extensions;
 mod gateway;
@@ -109,7 +113,7 @@ fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> R
 fn check_ui_setting(key: &str, value: &str) -> Res<()> {
     const UI_KEYS: &[&str] = &[
         "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
-        "mcp_disabled", "extended_thinking", "user_name",
+        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled",
     ];
     if key.starts_with("feedback:") {
         return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
@@ -184,7 +188,7 @@ async fn project_add_files(app: tauri::AppHandle, state: State<'_, Arc<AppState>
             Ok(a) if a.kind == "text" => {
                 state.db.lock().unwrap().add_project_file(&project_id, &a.name, a.text.as_deref().unwrap_or(""), a.size as i64).map_err(e)?
             }
-            Ok(a) => errors.push(format!("{}: only text files can be project knowledge for now", a.name)),
+            Ok(a) => errors.push(format!("{}: images can't be project knowledge; add text, Markdown, code or PDF files", a.name)),
             Err(err) => errors.push(err),
         }
     }
@@ -341,9 +345,38 @@ async fn mcp_save_server(state: State<'_, Arc<AppState>>, name: String, config: 
 async fn mcp_remove_server(state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
     let mut cfg = McpConfig::load(&state.mcp_config_path);
     cfg.servers.remove(&name);
+    mcp_oauth::forget(&name);
     cfg.save(&state.mcp_config_path).map_err(e)?;
     state.mcp.stop(&name).await;
     state.mcp.set_config(&cfg).await;
+    Ok(())
+}
+
+/// OAuth sign-in for a remote connector: opens the system browser, waits for the loopback redirect.
+#[tauri::command]
+async fn mcp_authorize(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = McpConfig::load(&state.mcp_config_path)
+        .servers
+        .get(&name)
+        .and_then(|s| s.url.clone())
+        .ok_or("not a remote connector")?;
+    let opener = app.clone();
+    mcp_oauth::authorize(&name, &url, move |u| {
+        let _ = opener.opener().open_url(u, None::<&str>);
+    })
+    .await
+    .map_err(e)?;
+    state.mcp.stop(&name).await;
+    state.mcp.start(&name).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn mcp_sign_out(state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
+    mcp_oauth::forget(&name);
+    state.mcp.stop(&name).await;
+    state.mcp.start(&name).await;
     Ok(())
 }
 
@@ -514,6 +547,10 @@ fn read_attachment(path: &std::path::Path) -> Result<Attachment, String> {
         _ => None,
     };
     let bytes = std::fs::read(path).map_err(e)?;
+    if pdf::is_pdf(&bytes) {
+        let text = pdf::extract_text(&bytes).map_err(|err| format!("{name}: {err}"))?;
+        return Ok(Attachment { name, mime: "application/pdf".into(), kind: "text".into(), text: Some(text), data_url: None, size: meta.len() });
+    }
     if let Some(mime) = image_mime {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         return Ok(Attachment { name, mime: mime.into(), kind: "image".into(), text: None, data_url: Some(format!("data:{mime};base64,{b64}")), size: meta.len() });
@@ -604,6 +641,55 @@ fn list_workspaces(state: State<'_, Arc<AppState>>) -> Vec<String> {
 }
 
 #[tauri::command]
+async fn worktree_list(state: State<'_, Arc<AppState>>, cwd: String) -> Res<Vec<agent::Worktree>> {
+    let dir = check_workspace(&state, &cwd)?;
+    agent::worktrees(&dir).await.map_err(e)
+}
+
+/// New worktrees are granted like a picked folder, so the Code tab can open them.
+#[tauri::command]
+async fn worktree_add(state: State<'_, Arc<AppState>>, cwd: String, branch: String) -> Res<String> {
+    let dir = check_workspace(&state, &cwd)?;
+    let p = agent::worktree_add(&dir, &branch).await.map_err(e)?.to_string_lossy().to_string();
+    let mut ws = granted_workspaces(&state);
+    if !ws.contains(&p) {
+        ws.push(p.clone());
+        state.db.lock().unwrap().set_setting("workspaces", &serde_json::to_string(&ws).map_err(e)?).map_err(e)?;
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+async fn worktree_remove(state: State<'_, Arc<AppState>>, cwd: String, path: String) -> Res<()> {
+    let dir = check_workspace(&state, &cwd)?;
+    agent::worktree_remove(&dir, std::path::Path::new(&path)).await.map_err(e)?;
+    let ws: Vec<String> = granted_workspaces(&state).into_iter().filter(|w| w != &path).collect();
+    state.db.lock().unwrap().set_setting("workspaces", &serde_json::to_string(&ws).map_err(e)?).map_err(e)
+}
+
+/// Local dev-server preview in its own window. That window has no capability, so its
+/// (untrusted) page cannot reach the IPC. Async: window creation from a sync command deadlocks on Windows.
+#[tauri::command]
+async fn preview_open(app: tauri::AppHandle, url: String) -> Res<()> {
+    if !agent::is_local_preview_url(&url) {
+        return Err("only local http(s) URLs with a port can be previewed".into());
+    }
+    let parsed: tauri::Url = url.parse().map_err(e)?;
+    if let Some(w) = app.get_webview_window("preview") {
+        w.navigate(parsed).map_err(e)?;
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "preview", tauri::WebviewUrl::External(parsed))
+        .title("Preview")
+        .inner_size(1100.0, 760.0)
+        .build()
+        .map_err(e)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn code_start(
     state: State<'_, Arc<AppState>>,
     cwd: String,
@@ -649,6 +735,19 @@ async fn git_status(state: State<'_, Arc<AppState>>, cwd: String) -> Res<agent::
 async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<String>) -> Res<String> {
     let dir = check_workspace(&state, &cwd)?;
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
+}
+
+// ---------- voice
+
+/// Dictation: gateway STT when `stt_model` is set, otherwise local faster-whisper.
+#[tauri::command]
+async fn voice_transcribe(state: State<'_, Arc<AppState>>, audio_b64: String, mime: String) -> Res<String> {
+    use base64::Engine;
+    let audio = base64::engine::general_purpose::STANDARD.decode(audio_b64).map_err(e)?;
+    let stt = state.db.lock().unwrap().get_setting("stt_model").filter(|s| !s.trim().is_empty());
+    let gw = state.gateway.read().await.clone();
+    let work_dir = state.mcp_config_path.parent().map(|p| p.join("voice")).ok_or("no data dir")?;
+    voice::transcribe(&gw, stt.as_deref(), audio, &mime, &work_dir).await.map_err(|err| format!("{err:#}"))
 }
 
 // ---------- quick entry / shell
@@ -739,6 +838,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Run-on-login is off until the user enables it in Settings; starts minimized to the tray.
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             // OPENCLAUDE_DATA_DIR isolates test runs from the user's real profile.
             let data_dir = match std::env::var_os("OPENCLAUDE_DATA_DIR") {
@@ -784,6 +885,11 @@ pub fn run() {
                 }
             }
             shell::build_tray(app.handle())?;
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             tasks::start_scheduler(state.clone(), app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -839,6 +945,8 @@ pub fn run() {
             mcp_save_server,
             mcp_remove_server,
             mcp_restart,
+            mcp_authorize,
+            mcp_sign_out,
             mcp_import_candidates,
             mcp_import,
             extension_pick,
@@ -851,6 +959,10 @@ pub fn run() {
             artifact_put,
             pick_workspace,
             list_workspaces,
+            worktree_list,
+            worktree_add,
+            worktree_remove,
+            preview_open,
             code_start,
             code_send,
             code_stop,
@@ -860,6 +972,7 @@ pub fn run() {
             probe_model,
             get_probes,
             quick_entry_toggle,
+            voice_transcribe,
             quick_entry_submit,
             quick_entry_hide,
             menu_action,
