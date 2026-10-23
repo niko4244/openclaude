@@ -466,6 +466,20 @@ async fn bearer(server: &str, resource: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// Discovery against real OAuth-protected MCP servers (GET-only; no client is registered).
+    #[tokio::test]
+    #[ignore = "network: mcp.linear.app / mcp.notion.com"]
+    async fn live_discovery_against_real_servers() {
+        let http = client();
+        for u in ["https://mcp.linear.app/mcp", "https://mcp.notion.com/mcp"] {
+            let url = Url::parse(u).unwrap();
+            let (meta, scope) = discover(&http, &url).await.unwrap_or_else(|e| panic!("{u}: {e:#}"));
+            println!("{u}: issuer={} authz={} token={} reg={:?} scope={scope:?}", meta.issuer, meta.authorization_endpoint, meta.token_endpoint, meta.registration_endpoint.as_ref().map(|r| r.as_str()));
+            assert!(meta.registration_endpoint.is_some(), "{u} supports dynamic client registration");
+            assert_eq!(meta.token_endpoint.scheme(), "https");
+        }
+    }
+
     use super::*;
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;

@@ -192,7 +192,7 @@ try {
 
   // 6. artifact preview in isolated origin
   await page.keyboard.press("Control+n");
-  await sendMessage(page, "Create a complete HTML page with <h1 id=\"t\">Hello Artifact</h1> as an artifact titled \"Hello page\". No explanation.");
+  await sendMessage(page, "Create a complete HTML page with <h1 id=\"t\">Hello Artifact</h1>. Reply with only one fenced code block whose opening line is exactly: ```html title=\"Hello page\" — no explanation.");
   await waitIdle(page, 300000);
   // Titled blocks become artifact cards and auto-open; untitled html still offers Preview.
   const autoOpened = await page.waitForSelector(".artifact-panel iframe", { timeout: 4000 }).then(() => true, () => false);

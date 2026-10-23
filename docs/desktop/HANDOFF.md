@@ -42,16 +42,20 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Pushed:** everything up to folder tasks (Cowork-style, row 17).
-  - Tasks can target a granted folder.
-  - The coding agent runs headless in `default` mode with our own approval policy (`agent::allow_in_folder`): Write/Edit inside the folder are allowed, everything else that asks is denied.
-  - Read-only shell commands still run, because the CLI auto-allows them.
-  - Live-verified: the Write was allowed and `mkdir` was denied.
-- **Finding:** the CLI's `acceptEdits` mode auto-runs filesystem shell commands (`mkdir`, redirects), so don't use it where commands must be blocked.
-- **Gate running:** Rust, build, E2E (including the new folder-task check), a11y.
+- **Pushed:** folder tasks, voice conversation mode, live remote-MCP tests (Streamable HTTP against DeepWiki; OAuth discovery against Linear and Notion).
+- **Gate:**
+  - E2E 36/37. The only miss is the artifact check, which depends on model compliance; the prompt is now explicit.
+  - a11y 0 violations.
+  - Rust 66, plus live: headless folder policy, browser, CLI approvals, DeepWiki, OAuth discovery.
+- **Matrix:** 19 operational, 4 partial, 2 not planned.
 
 ## Next steps (in order)
-1. After the gate: update matrix row 17, then build a hands-free voice mode (row 19): continuous dictate, send, read-aloud loop.
+1. Remaining partials:
+   - Row 9: no public extension directory exists.
+   - Row 18: computer use needs a vision model on the gateway.
+   - Row 20: a published release; ask Nik first.
+   - Row 24: a Chrome extension; deliberately replaced by the built-in browser.
+   - Visual parity: needs side-by-side reference screenshots (ask Nik).
 3. Remaining parity gaps:
    - An extension directory (needs a hosted index; none exists for MCPB yet).
    - Artifact in-panel editing.

@@ -729,6 +729,29 @@ impl McpManager {
 
 #[cfg(test)]
 mod tests {
+    /// Real public MCP server (no auth): Streamable HTTP must connect and list tools.
+    #[tokio::test]
+    #[ignore = "network: talks to mcp.deepwiki.com"]
+    async fn live_remote_http_and_sse() {
+        let mut cfg = McpConfig::default();
+        cfg.servers.insert("dw-http".into(), ServerConfig { kind: Some("http".into()), url: Some("https://mcp.deepwiki.com/mcp".into()), ..Default::default() });
+        cfg.servers.insert("dw-sse".into(), ServerConfig { kind: Some("sse".into()), url: Some("https://mcp.deepwiki.com/sse".into()), ..Default::default() });
+        let m = McpManager::default();
+        m.set_config(&cfg).await;
+        m.start_all().await;
+        for st in m.statuses().await {
+            println!("{} {} tools={:?} err={:?}", st.name, st.state, st.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), st.error);
+            if st.name == "dw-http" {
+                assert_eq!(st.state, "connected", "{:?}", st.error);
+                assert!(!st.tools.is_empty());
+            } else {
+                // DeepWiki retired SSE (410 Gone); the server's explanation must reach the user.
+                assert!(st.state == "connected" || st.error.as_deref().is_some_and(|e| e.contains("410")), "{:?}", st.error);
+            }
+        }
+        m.stop_all().await;
+    }
+
     use super::*;
 
     #[test]
