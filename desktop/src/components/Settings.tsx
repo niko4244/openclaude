@@ -28,7 +28,11 @@ export function Settings({
   projects,
   onProjectsChanged,
   toast,
+  onProfileChanged,
+  onClose,
 }: {
+  onProfileChanged: () => void;
+  onClose: () => void;
   initialTab?: string;
   models: ModelEntry[];
   onModelsChanged: () => Promise<void>;
@@ -44,34 +48,49 @@ export function Settings({
   return (
     <div className="settings">
       <div className="settings-inner">
-        <h2>Settings</h2>
-        <div className="settings-tabs" role="tablist">
+        <div className="page-head"><h2>Settings</h2><span className="spacer" /><button className="btn" onClick={onClose}>Done</button></div>
+        <div className="settings-layout">
+        <div className="settings-tabs" role="tablist" aria-orientation="vertical">
           {TABS.map(([t, l]) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{l}</button>
           ))}
         </div>
-        {tab === "general" && <General theme={theme} onTheme={onTheme} toast={toast} />}
+        <div className="settings-body">
+        {tab === "general" && <General theme={theme} onTheme={onTheme} toast={toast} onProfileChanged={onProfileChanged} />}
         {tab === "gateway" && <Gateway onChanged={onGatewayChanged} toast={toast} />}
         {tab === "models" && <Models models={models} onRefresh={onModelsChanged} />}
         {tab === "connectors" && <Connectors toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
         {tab === "about" && <About />}
+        </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function General({ theme, onTheme, toast }: { theme: string; onTheme: (t: string) => void; toast: (m: string) => void }) {
+function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; onTheme: (t: string) => void; toast: (m: string) => void; onProfileChanged: () => void }) {
+  const [name, setName] = useState("");
+  useEffect(() => { void api.getSetting("user_name").then((v) => setName(v || "")); }, []);
   const [sys, setSys] = useState("");
   const [tools, setTools] = useState(true);
   const [hotkey, setHotkey] = useState("");
+  const [tray, setTray] = useState(true);
   useEffect(() => {
     void api.getSetting("system_prompt").then((v) => setSys(v || ""));
     void api.getSetting("tools_enabled").then((v) => setTools(v !== "false"));
+    void api.getSetting("close_to_tray").then((v) => setTray(v !== "false"));
     void api.getSetting("quick_entry_shortcut").then((v) => setHotkey(v ?? "CommandOrControl+Alt+Space"));
   }, []);
   return (
     <>
+      <div className="field">
+        <label htmlFor="uname">What should OpenClaude call you?</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input id="uname" style={{ flex: 1 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
+          <button className="btn" onClick={async () => { await api.setSetting("user_name", name.trim()); onProfileChanged(); toast("Name saved"); }}>Save</button>
+        </div>
+      </div>
       <div className="field">
         <label htmlFor="theme">Appearance</label>
         <select id="theme" value={theme} onChange={(e) => onTheme(e.target.value)}>
@@ -90,9 +109,13 @@ function General({ theme, onTheme, toast }: { theme: string; onTheme: (t: string
         <span className="help">Models whose metadata says they cannot call tools never receive them. Every tool call needs your approval unless you chose “Always allow”.</span>
       </div>
       <div className="field">
+        <label><input type="checkbox" checked={tray} onChange={async (e) => { setTray(e.target.checked); await api.setSetting("close_to_tray", String(e.target.checked)); }} /> Keep running in the system tray when the window is closed</label>
+        <span className="help">Keeps connectors and background agents alive. Quit from the tray icon or File, Quit.</span>
+      </div>
+      <div className="field">
         <label htmlFor="hk">Quick entry shortcut</label>
         <input id="hk" value={hotkey} onChange={(e) => setHotkey(e.target.value)} placeholder="CommandOrControl+Alt+Space" />
-        <span className="help">Global shortcut that brings OpenClaude to the front with a new chat. Leave empty to disable. Applies on save.</span>
+        <span className="help">Global shortcut that opens the floating Quick Entry box; Enter starts a new chat in the main window. Leave empty to disable. Applies on save.</span>
         <div><button className="btn" onClick={async () => { await api.setSetting("quick_entry_shortcut", hotkey.trim()); window.dispatchEvent(new Event("oc-shortcut-changed")); toast("Shortcut saved"); }}>Save shortcut</button></div>
       </div>
     </>

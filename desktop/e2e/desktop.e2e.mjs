@@ -6,7 +6,8 @@
 //
 // Env: OC_E2E_MODEL (default qwen-local), OPENCLAUDE_GATEWAY_URL.
 import { chromium } from "playwright-core";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,6 +61,8 @@ async function stop({ proc, browser }) {
   await sleep(500);
 }
 
+const within = (ms, p) => Promise.race([p, sleep(ms).then(() => false)]);
+
 async function sendMessage(page, text, timeout = 120000) {
   const before = await page.locator(".msg.user").count();
   await page.fill(".composer textarea", text);
@@ -109,6 +112,7 @@ try {
     () => record("gateway online + authenticated", true),
     async () => record("gateway online + authenticated", false, await page.locator(".sidebar-foot").innerText()),
   );
+  await page.waitForFunction(() => !/No models|Select a model/.test(document.querySelector(".composer .picker-btn")?.textContent || ""), null, { timeout: 30000 }).catch(() => {});
   await page.click(".composer .picker-btn");
   const placeholder = await page.getAttribute(".picker-pop input", "placeholder");
   const n = Number(/Search (\d+)/.exec(placeholder || "")?.[1] || 0);
@@ -168,11 +172,15 @@ try {
 
   // 6. artifact preview in isolated origin
   await page.keyboard.press("Control+n");
-  await sendMessage(page, "Output only a complete HTML document in a ```html code block: a page with <h1 id=\"t\">Hello Artifact</h1>. No explanation.");
+  await sendMessage(page, "Create a complete HTML page with <h1 id=\"t\">Hello Artifact</h1> as an artifact titled \"Hello page\". No explanation.");
   await waitIdle(page);
+  // Titled blocks become artifact cards and auto-open; untitled html still offers Preview.
+  const autoOpened = await page.waitForSelector(".artifact-panel iframe", { timeout: 4000 }).then(() => true, () => false);
+  const card = await page.locator(".artifact-card").count();
+  record("artifact auto-opens as a card", autoOpened && card > 0, `auto-opened=${autoOpened}, cards=${card}`);
   const previewBtn = page.locator('.codeblock-head button:has-text("Preview")').last();
-  if (await previewBtn.count()) {
-    await previewBtn.click();
+  if (autoOpened || (await previewBtn.count())) {
+    if (!autoOpened) await previewBtn.click();
     const frame = page.frameLocator(".artifact-panel iframe");
     const ok = await frame.locator("h1").first().waitFor({ timeout: 10000 }).then(() => true, () => false);
     // Tauri injects its IPC shim into subframes too; what matters is that calls from the
@@ -199,6 +207,15 @@ try {
   const convCount = await page.locator(".conv-item").count();
   await stop(app);
 
+  // seed a granted workspace for the Code tab, as the native folder picker would
+  const repo = join(dataDir, "ws-repo");
+  mkdirSync(repo, { recursive: true });
+  execSync("git init -q && git -c user.email=e@e -c user.name=e commit -q --allow-empty -m init", { cwd: repo, shell: true });
+  writeFileSync(join(repo, "new-file.txt"), "hello");
+  const db = new DatabaseSync(join(dataDir, "openclaude.db"));
+  db.prepare("INSERT INTO settings(key,value) VALUES('workspaces',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify([repo]));
+  db.close();
+
   // 8. persistence across restart
   app = await launch();
   const after = await app.page.locator(".conv-item").count();
@@ -207,6 +224,82 @@ try {
   await app.page.locator(".conv-item .conv-title", { hasText: "pong" }).first().click();
   await app.page.waitForSelector(".msg.assistant", { timeout: 10000 });
   record("reopened chat shows messages", (await app.page.locator(".msg").count()) >= 2);
+  const p2 = app.page;
+
+  // 9. find in chat
+  await p2.keyboard.press("Control+f");
+  await p2.fill(".findbar input", "pong");
+  const findCount = await p2.locator(".findbar .muted").innerText();
+  record("find in chat highlights matches", /^1 \/ [1-9]/.test(findCount), findCount);
+  await p2.screenshot({ path: join(out, "08-find.png") });
+  await p2.keyboard.press("Escape");
+
+  // 9b. regenerate creates a second version; branch nav switches between them
+  await p2.locator('[aria-label="Retry"]').last().click();
+  await p2.waitForSelector('.send-btn[aria-label="Stop generating"]', { timeout: 10000 }).catch(() => {});
+  await waitIdle(p2);
+  const nav2 = await p2.locator(".msg.assistant .branch-nav span").last().innerText().catch(() => "");
+  await p2.locator('.msg.assistant [aria-label="Previous version"]').last().click().catch(() => {});
+  await sleep(500);
+  const nav1 = await p2.locator(".msg.assistant .branch-nav span").last().innerText().catch(() => "");
+  record("regenerate + branch navigation", nav2.replace(/\s/g, "") === "2/2" && nav1.replace(/\s/g, "") === "1/2", `after retry: ${nav2} → after prev: ${nav1}`);
+
+  // 10. shortcuts sheet
+  await p2.keyboard.press("Control+/");
+  const sheet = await p2.locator('[role="dialog"][aria-label="Keyboard shortcuts"]').isVisible();
+  record("shortcuts sheet (Ctrl+/)", sheet);
+  await p2.keyboard.press("Escape");
+
+  // 11. UI cannot grant itself folders or swap the agent binary
+  const blocked = await p2.evaluate(async () => {
+    const r = [];
+    for (const key of ["workspaces", "openclaude_cli_path"]) {
+      try { await window.__TAURI_INTERNALS__.invoke("set_setting", { key, value: "x" }); r.push(`${key}:allowed`); }
+      catch { r.push(`${key}:blocked`); }
+    }
+    return r.join(",");
+  });
+  record("security settings are backend-only", !blocked.includes("allowed"), blocked);
+
+  // 12. quick entry window -> new chat in main window
+  const before = await p2.locator(".conv-item").count();
+  const toggled = await within(5000, p2.evaluate(() => window.__TAURI_INTERNALS__.invoke("quick_entry_toggle").then(() => true)));
+  if (!toggled) record("quick_entry_toggle returns", false, "command hung");
+  let quick;
+  for (let i = 0; i < 50 && !quick; i++) {
+    for (const pg of app.browser.contexts().flatMap((c) => c.pages())) {
+      if (pg !== p2 && (await within(1500, pg.locator(".quick textarea").count().catch(() => 0)))) quick = pg;
+    }
+    if (!quick) await sleep(200);
+  }
+  record("quick entry window opens", !!quick);
+  if (quick) {
+    // A hidden WebView2 never paints, so guard every call on the quick window with a timeout.
+    await within(5000, quick.screenshot({ path: join(out, "09-quick-entry.png") }));
+    const typed = await within(8000, (async () => {
+      await quick.fill(".quick textarea", "Reply with exactly one word: quick");
+      await quick.keyboard.press("Enter");
+      return true;
+    })());
+    if (!typed) record("quick entry accepts typing", false, "quick window not interactable (hidden on blur?)");
+    await p2.waitForFunction((n) => document.querySelectorAll(".conv-item").length > n, before, { timeout: 20000 }).catch(() => {});
+    await waitIdle(p2).catch(() => {});
+    const r = await lastAssistantText(p2);
+    record("quick entry starts a chat in main window", /quick/i.test(r) && (await p2.locator(".conv-item").count()) > before, JSON.stringify(r.slice(0, 60)));
+  }
+
+  // 13. code tab: recent folder + terminal
+  await p2.click('.nav-item:has-text("Code")');
+  await p2.locator(".nav-item.mono").first().click();
+  await p2.click('button:has-text("Terminal")');
+  await p2.fill(".term-in input", "git status --short; echo done-marker");
+  await p2.keyboard.press("Enter");
+  const termOk = await p2.waitForFunction(() => /done-marker[\s\S]*exit 0/.test(document.querySelector(".term-out")?.textContent || ""), null, { timeout: 30000 }).then(() => true, () => false);
+  const termText = await p2.locator(".term-out").innerText();
+  record("code terminal runs in workspace", termOk && termText.includes("new-file.txt"), termText.split("\n").slice(-4).join(" | "));
+  const gitPanel = await p2.locator('.artifact-panel .nav-item:has-text("new-file.txt")').count();
+  record("code tab shows git status", gitPanel > 0);
+  await p2.screenshot({ path: join(out, "10-code-terminal.png") });
 } catch (e) {
   record("harness", false, String(e?.stack || e));
 } finally {

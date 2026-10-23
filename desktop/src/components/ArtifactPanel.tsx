@@ -6,7 +6,7 @@ import { copyText, Markdown, type Artifact } from "./Markdown";
  * Untrusted HTML/SVG runs in a sandboxed iframe on a separate origin
  * (`artifact:`) with its own CSP; it can never reach the app's IPC.
  */
-export function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+export function ArtifactPanel({ artifact, versions = [], onSelect, onClose }: { artifact: Artifact; versions?: Artifact[]; onSelect?: (a: Artifact) => void; onClose: () => void }) {
   const previewable = ["html", "svg", "markdown", "md"].includes(artifact.language);
   const [tab, setTab] = useState<"preview" | "code">(previewable ? "preview" : "code");
   const [url, setUrl] = useState<string | null>(null);
@@ -24,6 +24,12 @@ export function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClo
     <section className="artifact-panel" aria-label="Artifact">
       <div className="topbar" style={{ borderBottom: "1px solid var(--border)" }}>
         <span className="title">{artifact.title}</span>
+        {versions.length > 1 && (
+          <select className="btn" aria-label="Artifact version" value={versions.indexOf(artifact) >= 0 ? versions.indexOf(artifact) : versions.length - 1}
+            onChange={(e) => onSelect?.(versions[Number(e.target.value)])}>
+            {versions.map((_, i) => <option key={i} value={i}>Version {i + 1}{i === versions.length - 1 ? " (latest)" : ""}</option>)}
+          </select>
+        )}
         <span className="spacer" />
         {previewable && (
           <div className="tabs">

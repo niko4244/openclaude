@@ -24,6 +24,12 @@ const MIGRATIONS: &[&str] = &[
         superseded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
      CREATE INDEX messages_conv ON messages(conversation_id, seq);
      CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    // v2: lineage for branch navigation. Existing rows chain to the previous row by seq.
+    "ALTER TABLE messages ADD COLUMN parent_id TEXT;
+     UPDATE messages SET parent_id = (
+        SELECT m2.id FROM messages m2 WHERE m2.conversation_id = messages.conversation_id AND m2.seq < messages.seq
+        ORDER BY m2.seq DESC LIMIT 1);
+     CREATE INDEX messages_parent ON messages(conversation_id, parent_id);",
 ];
 
 pub fn now_ms() -> i64 {
@@ -83,6 +89,11 @@ pub struct Message {
     pub status: String,
     pub error: Option<String>,
     pub created_at: i64,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// Alternatives at this point in the conversation (edits / regenerations), oldest first.
+    #[serde(default)]
+    pub sibling_ids: Vec<String>,
 }
 
 fn parse_json(s: Option<String>) -> Option<Value> {
@@ -228,7 +239,7 @@ impl Db {
     pub fn messages(&self, conversation_id: &str) -> anyhow::Result<Vec<Message>> {
         let mut st = self.conn.prepare(
             "SELECT id,conversation_id,seq,role,content,reasoning,tool_calls,tool_call_id,name,model_requested,
-                    model_served,routed_host,fallbacks,usage,cost,status,error,created_at
+                    model_served,routed_host,fallbacks,usage,cost,status,error,created_at,parent_id
              FROM messages WHERE conversation_id=?1 AND superseded=0 ORDER BY seq",
         )?;
         let rows = st.query_map([conversation_id], |r| {
@@ -252,9 +263,69 @@ impl Db {
                 status: r.get(15)?,
                 error: r.get(16)?,
                 created_at: r.get(17)?,
+                parent_id: r.get(18)?,
+                sibling_ids: vec![],
             })
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut out: Vec<Message> = rows.collect::<Result<_, _>>()?;
+        // Siblings share parent and role. Only user/assistant turns are navigable.
+        let mut st = self.conn.prepare(
+            "SELECT id, parent_id, role FROM messages WHERE conversation_id=?1 AND role IN ('user','assistant') ORDER BY created_at, seq",
+        )?;
+        let all: Vec<(String, Option<String>, String)> =
+            st.query_map([conversation_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+        for m in out.iter_mut().filter(|m| m.role == "user" || m.role == "assistant") {
+            let sibs: Vec<String> = all.iter().filter(|(_, p, r)| *p == m.parent_id && *r == m.role).map(|(id, _, _)| id.clone()).collect();
+            if sibs.len() > 1 {
+                m.sibling_ids = sibs;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Show another version of a turn: hide the current branch from that point and
+    /// restore the chosen sibling with its most recent continuation.
+    pub fn switch_branch(&self, conversation_id: &str, target_id: &str) -> anyhow::Result<()> {
+        let (parent, role): (Option<String>, String) = self.conn.query_row(
+            "SELECT parent_id, role FROM messages WHERE id=?1 AND conversation_id=?2",
+            params![target_id, conversation_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let current: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM messages WHERE conversation_id=?1 AND superseded=0 AND role=?2 AND parent_id IS ?3 ORDER BY seq LIMIT 1",
+                params![conversation_id, role, parent],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current.as_deref() == Some(target_id) {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        if let Some(cur) = &current {
+            tx.execute(
+                "UPDATE messages SET superseded=1 WHERE conversation_id=?1 AND seq >= (SELECT seq FROM messages WHERE id=?2)",
+                params![conversation_id, cur],
+            )?;
+        }
+        let mut node = target_id.to_string();
+        loop {
+            tx.execute("UPDATE messages SET superseded=0 WHERE id=?1", [&node])?;
+            let next: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM messages WHERE conversation_id=?1 AND parent_id=?2 ORDER BY created_at DESC, seq DESC LIMIT 1",
+                    params![conversation_id, node],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match next {
+                Some(n) => node = n,
+                None => break,
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn insert_message(&self, m: &mut Message) -> anyhow::Result<()> {
@@ -270,15 +341,23 @@ impl Db {
         if m.status.is_empty() {
             m.status = "complete".into();
         }
+        m.parent_id = self
+            .conn
+            .query_row(
+                "SELECT id FROM messages WHERE conversation_id=?1 AND superseded=0 ORDER BY seq DESC LIMIT 1",
+                [&m.conversation_id],
+                |r| r.get(0),
+            )
+            .optional()?;
         self.conn.execute(
             "INSERT INTO messages(id,conversation_id,seq,role,content,reasoning,tool_calls,tool_call_id,name,
-               model_requested,model_served,routed_host,fallbacks,usage,cost,status,error,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+               model_requested,model_served,routed_host,fallbacks,usage,cost,status,error,created_at,parent_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
                 m.id, m.conversation_id, m.seq, m.role, m.content.to_string(), m.reasoning,
                 m.tool_calls.as_ref().map(|v| v.to_string()), m.tool_call_id, m.name,
                 m.model_requested, m.model_served, m.routed_host, m.fallbacks,
-                m.usage.as_ref().map(|v| v.to_string()), m.cost, m.status, m.error, m.created_at
+                m.usage.as_ref().map(|v| v.to_string()), m.cost, m.status, m.error, m.created_at, m.parent_id
             ],
         )?;
         self.touch_conversation(&m.conversation_id)?;
@@ -315,6 +394,35 @@ mod tests {
         assert_eq!(n, 4, "superseded turns stay on disk");
         assert_eq!(db.list_conversations(Some("again"), None).unwrap().len(), 1);
         assert_eq!(db.list_conversations(Some("nomatch"), None).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn branches_regenerate_edit_and_switch() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation(None, None).unwrap();
+        let add = |role: &str, text: &str| {
+            let mut m = Message { conversation_id: c.id.clone(), role: role.into(), content: Value::String(text.into()), ..Default::default() };
+            db.insert_message(&mut m).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            m.id
+        };
+        let _u1 = add("user", "q1");
+        let a1 = add("assistant", "a1");
+        // regenerate: replace a1 with a2
+        db.supersede_from(&c.id, &a1).unwrap();
+        let a2 = add("assistant", "a2");
+        let ms = db.messages(&c.id).unwrap();
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[1].sibling_ids, vec![a1.clone(), a2.clone()]);
+        // continue on a2, then switch back to a1: a2's continuation is hidden, a1 visible
+        let u2 = add("user", "q2");
+        db.switch_branch(&c.id, &a1).unwrap();
+        let ms = db.messages(&c.id).unwrap();
+        assert_eq!(ms.iter().map(|m| m.content.as_str().unwrap()).collect::<Vec<_>>(), ["q1", "a1"]);
+        // switch forward again restores a2 and its follow-up q2
+        db.switch_branch(&c.id, &a2).unwrap();
+        let ms = db.messages(&c.id).unwrap();
+        assert_eq!(ms.iter().map(|m| m.id.clone()).collect::<Vec<_>>()[1..], [a2, u2]);
     }
 
     #[test]

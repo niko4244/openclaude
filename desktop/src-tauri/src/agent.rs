@@ -30,6 +30,39 @@ pub struct CodeSession {
 #[derive(Default)]
 pub struct CodeSessions {
     pub map: Mutex<HashMap<String, Arc<CodeSession>>>,
+    /// One-shot shell commands typed by the user in the Code tab.
+    cmds: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CmdEvent {
+    Out { line: String },
+    Err { line: String },
+    Exited { code: Option<i32> },
+}
+
+/// The user's own command, run in the granted workspace with no window.
+pub fn shell_command(cwd: &Path, command: &str) -> Command {
+    #[cfg(windows)]
+    let mut c = {
+        let mut c = Command::new("powershell.exe");
+        c.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]);
+        c.creation_flags(0x0800_0000);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = {
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+    c.current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    c
 }
 
 pub const PERMISSION_MODES: &[&str] = &["plan", "default", "acceptEdits", "bypassPermissions"];
@@ -129,13 +162,45 @@ impl CodeSessions {
         Ok(())
     }
 
+    pub async fn run_command(&self, id: String, cwd: &Path, command: &str, ch: Channel<CmdEvent>) -> anyhow::Result<()> {
+        let mut child = shell_command(cwd, command).spawn()?;
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let child = Arc::new(Mutex::new(child));
+        self.cmds.lock().await.insert(id, child.clone());
+        let ch2 = ch.clone();
+        let err_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = ch2.send(CmdEvent::Err { line });
+            }
+        });
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = ch.send(CmdEvent::Out { line });
+            }
+            let _ = err_task.await;
+            let code = child.lock().await.wait().await.ok().and_then(|s| s.code());
+            let _ = ch.send(CmdEvent::Exited { code });
+        });
+        Ok(())
+    }
+
     pub async fn stop(&self, id: &str) {
         if let Some(s) = self.map.lock().await.remove(id) {
             let _ = s.child.lock().await.kill().await;
         }
+        if let Some(c) = self.cmds.lock().await.remove(id) {
+            let _ = c.lock().await.kill().await;
+        }
     }
 
     pub async fn stop_all(&self) {
+        let cmd_ids: Vec<String> = self.cmds.lock().await.keys().cloned().collect();
+        for id in cmd_ids {
+            self.stop(&id).await;
+        }
         let ids: Vec<String> = self.map.lock().await.keys().cloned().collect();
         for id in ids {
             self.stop(&id).await;
@@ -219,6 +284,15 @@ mod tests {
             .filter_map(|(k, v)| Some((k.to_string_lossy().into(), v?.to_string_lossy().into())))
             .collect();
         assert_eq!(env["OPENAI_BASE_URL"], "http://127.0.0.1:4000/v1");
+    }
+
+    #[tokio::test]
+    async fn shell_command_runs_in_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("marker.txt"), "x").unwrap();
+        let cmd = if cfg!(windows) { "Get-ChildItem -Name" } else { "ls" };
+        let out = shell_command(dir.path(), cmd).output().await.unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("marker.txt"));
     }
 
     #[tokio::test]

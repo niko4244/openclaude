@@ -100,8 +100,8 @@ export function useChat(conversationId: string | null, onTurnFinished: () => voi
     if (r?.runId && r.runId !== "pending") await api.chatCancel(r.runId);
   }, [runs]);
 
-  const decide = useCallback(async (cid: string, a: Approval, allow: boolean, remember: boolean) => {
-    await api.toolDecision(a.request_id, allow, remember);
+  const decide = useCallback(async (cid: string, a: Approval, allow: boolean, scope: "once" | "chat" | "always") => {
+    await api.toolDecision(a.request_id, allow, scope);
     patch(cid, (r) => ({ ...r, approvals: r.approvals.filter((x) => x.request_id !== a.request_id) }));
   }, []);
 

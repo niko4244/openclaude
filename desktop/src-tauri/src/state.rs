@@ -17,12 +17,15 @@ pub struct AppState {
     pub models: RwLock<Vec<ModelEntry>>,
     pub mcp: McpManager,
     pub runs: Mutex<HashMap<String, Arc<Run>>>,
-    /// request_id -> (allow, remember)
-    pub approvals: Mutex<HashMap<String, oneshot::Sender<(bool, bool)>>>,
+    /// request_id -> (allow, scope) where scope is "once" | "chat" | "always"
+    pub approvals: Mutex<HashMap<String, oneshot::Sender<(bool, String)>>>,
+    /// (conversation_id, tool) pairs allowed for the rest of that chat ("Allow for this chat"); not persisted.
+    pub chat_allows: Mutex<std::collections::HashSet<(String, String)>>,
     pub mcp_config_path: PathBuf,
     /// Untrusted HTML served on the isolated `artifact:` origin.
     pub artifacts: Mutex<HashMap<String, String>>,
     pub code: crate::agent::CodeSessions,
+    pub zoom: Mutex<f64>,
 }
 
 /// OS credential store first, then environment. Never read from or written to logs.

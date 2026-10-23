@@ -4,8 +4,28 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Code2, FileText, Globe, Image as ImageIcon } from "lucide-react";
 
-export type Artifact = { title: string; language: string; code: string };
+/** `version`/`count` are set when the same titled artifact appears several times in a chat. */
+export type Artifact = { title: string; language: string; code: string; version?: number; count?: number };
+
+/** Fenced blocks tagged ```lang title="…" are artifacts (see the system prompt in chat.rs). */
+export const ARTIFACT_RE = /```([\w+-]*)[ \t]+title="([^"\n]+)"[^\n]*\n([\s\S]*?)```/g;
+
+export function extractArtifacts(text: string): Artifact[] {
+  return [...text.matchAll(ARTIFACT_RE)].map((m) => ({ language: (m[1] || "text").toLowerCase(), title: m[2], code: m[3].replace(/\n$/, "") }));
+}
+
+function ArtifactCard({ a, onOpen }: { a: Artifact; onOpen?: (a: Artifact) => void }) {
+  const Icon = a.language === "html" ? Globe : a.language === "svg" ? ImageIcon : a.language === "markdown" || a.language === "md" ? FileText : Code2;
+  const kind = a.language === "html" ? "Web page" : a.language === "svg" ? "Image" : a.language === "markdown" || a.language === "md" ? "Document" : `Code · ${a.language || "text"}`;
+  return (
+    <button className="artifact-card" onClick={() => onOpen?.(a)} title="Open in the side panel">
+      <span className="artifact-icon"><Icon size={18} /></span>
+      <span className="grow"><span className="artifact-title">{a.title}</span><span className="muted">{kind} · {a.code.split("\n").length} lines · click to open</span></span>
+    </button>
+  );
+}
 
 const PREVIEWABLE = new Set(["html", "svg", "markdown", "md"]);
 
@@ -24,10 +44,11 @@ export async function copyText(text: string) {
   }
 }
 
-function CodeBlock({ language, children, onOpen }: { language: string; children: ReactNode; onOpen?: (a: Artifact) => void }) {
+function CodeBlock({ language, children, onOpen, title }: { language: string; children: ReactNode; onOpen?: (a: Artifact) => void; title?: string }) {
   const [copied, setCopied] = useState(false);
   const code = nodeText(children).replace(/\n$/, "");
   const lines = code.split("\n").length;
+  if (title) return <ArtifactCard a={{ title, language, code }} onOpen={onOpen} />;
   return (
     <div className="codeblock">
       <div className="codeblock-head">
@@ -66,12 +87,14 @@ export const Markdown = memo(function Markdown({ text, onOpenArtifact }: { text:
       skipHtml
       components={{
         pre: ({ children }) => <>{children}</>,
-        code: ({ className, children }) => {
+        code: ({ className, children, node }) => {
           const m = /language-([\w+-]+)/.exec(className || "");
+          const meta = String((node?.data as { meta?: string } | undefined)?.meta ?? "");
+          const title = /title="([^"]+)"/.exec(meta)?.[1];
           const isBlock = !!m || nodeText(children).includes("\n");
           if (!isBlock) return <code>{children}</code>;
           return (
-            <CodeBlock language={(m?.[1] || "").toLowerCase()} onOpen={onOpenArtifact}>
+            <CodeBlock language={(m?.[1] || "").toLowerCase()} onOpen={onOpenArtifact} title={title}>
               {children}
             </CodeBlock>
           );

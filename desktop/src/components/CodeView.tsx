@@ -3,6 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ModelEntry } from "../api";
 import { ModelPicker } from "./ModelPicker";
 import { Markdown } from "./Markdown";
+import { Terminal } from "./Terminal";
 
 type CodeEvent =
   | { type: "agent"; record: AgentRecord }
@@ -47,8 +48,11 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [termOpen, setTermOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => { void invoke<string[]>("list_workspaces").then((ws) => setRecent(ws.reverse())); }, [cwd]);
   useEffect(() => { if (!model && defaultModel) setModel(defaultModel); }, [defaultModel, model]);
   useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [entries]);
 
@@ -121,6 +125,7 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
             {MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
           <span className="spacer" />
+          <button className="btn" disabled={!cwd} onClick={() => setTermOpen((t) => !t)} aria-pressed={termOpen}>⌨ Terminal</button>
           {session ? (
             <button className="btn danger" onClick={async () => { await invoke("code_stop", { sessionId: session }); }}>Stop agent</button>
           ) : (
@@ -132,6 +137,14 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
         <div className="chat-scroll" ref={scroller}>
           <div className="chat-inner">
             {!entries.length && <div className="muted">Open a folder, pick a model, start the agent, then describe a coding task. The OpenClaude CLI agent runs in that folder and talks to your LiteLLM gateway.</div>}
+            {!cwd && recent.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="section-label" style={{ padding: "0 0 4px" }}>Recent folders</div>
+                {recent.map((w) => (
+                  <button key={w} className="nav-item mono" onClick={() => { setCwd(w); setDiff(null); }} title={w}>📂 {w}</button>
+                ))}
+              </div>
+            )}
             {entries.map((e, i) =>
               e.kind === "user" ? <div key={i} className="msg user"><div className="bubble-user">{e.text}</div></div>
               : e.kind === "text" ? <div key={i} className="assistant-body"><Markdown text={e.text} /></div>
@@ -144,6 +157,7 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
             {busy && <span className="cursor" />}
           </div>
         </div>
+        {termOpen && cwd && <Terminal cwd={cwd} />}
         <div className="composer-dock">
           <div className="composer-wrap">
             <div className="composer">

@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "Main window: core IPC + the few plugins the UI uses directly",
   "windows": [
-    "main"
+    "main",
+    "quick"
   ],
   "permissions": [
     "core:default",

@@ -15,14 +15,28 @@ export function fmtTokens(n: number | null) {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : `${n}`;
 }
 
+/** Declared capability wins; otherwise fall back to what the probe measured. */
+export function capability(m: ModelEntry, cap: "tools" | "vision" | "reasoning"): { value: boolean | null; measured: boolean } {
+  const declared = cap === "tools" ? m.supports_tools : cap === "vision" ? m.supports_vision : m.supports_reasoning;
+  if (declared != null) return { value: declared, measured: false };
+  const probed = m.measured?.[cap];
+  return probed == null ? { value: null, measured: false } : { value: probed, measured: true };
+}
+
 function matches(m: ModelEntry, f: Filter) {
   switch (f) {
     case "local": return m.local;
     case "cloud": return !m.local;
-    case "tools": return m.supports_tools === true;
-    case "vision": return m.supports_vision === true;
-    case "reasoning": return m.supports_reasoning === true;
+    default: return capability(m, f).value === true;
   }
+}
+
+function CapBadge({ m, cap }: { m: ModelEntry; cap: "tools" | "vision" | "reasoning" }) {
+  const c = capability(m, cap);
+  if (c.value !== true) return null;
+  return c.measured
+    ? <span className="badge measured" title={`${cap}: verified by the capability probe`}>{cap} ✓</span>
+    : <span className="badge cap" title={`${cap}: declared by the gateway`}>{cap}</span>;
 }
 
 export function ModelPicker({
@@ -131,9 +145,9 @@ export function ModelPicker({
                         <div className="name">
                           {m.id}
                           {m.local && <span className="badge local">local</span>}
-                          {m.supports_tools && <span className="badge cap">tools</span>}
-                          {m.supports_vision && <span className="badge cap">vision</span>}
-                          {m.supports_reasoning && <span className="badge cap">reasoning</span>}
+                          <CapBadge m={m} cap="tools" />
+                          <CapBadge m={m} cap="vision" />
+                          <CapBadge m={m} cap="reasoning" />
                           {ctx && <span className="badge">{ctx}</span>}
                         </div>
                         <div className="sub">

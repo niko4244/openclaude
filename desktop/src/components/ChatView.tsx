@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, Pencil, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { api } from "../api";
 import { textOf, type Message } from "../api";
 import type { Approval, LiveRun } from "../useChat";
 import { copyText, Markdown, type Artifact } from "./Markdown";
@@ -46,19 +48,76 @@ function ToolCard({ name, args, result }: { name: string; args: string; result?:
   );
 }
 
-function ApprovalCard({ a, onDecide }: { a: Approval; onDecide: (allow: boolean, remember: boolean) => void }) {
+type Scope = "once" | "chat" | "always";
+
+function ApprovalCard({ a, onDecide }: { a: Approval; onDecide: (allow: boolean, scope: Scope) => void }) {
   return (
     <div className="approval" role="alertdialog" aria-label="Tool approval">
       <div style={{ marginBottom: 6 }}>
-        Allow <b>{a.server}</b> to run <b className="mono">{a.tool}</b>?
+        <b>{a.server}</b> wants to use <b className="mono">{a.tool}</b>
       </div>
       <pre>{JSON.stringify(a.arguments, null, 2)}</pre>
       <div className="row">
-        <button className="btn primary" onClick={() => onDecide(true, false)} autoFocus>Allow once</button>
-        <button className="btn" onClick={() => onDecide(true, true)}>Always allow this tool</button>
-        <button className="btn danger" onClick={() => onDecide(false, false)}>Deny</button>
+        <button className="btn primary" onClick={() => onDecide(true, "once")} autoFocus>Allow once</button>
+        <button className="btn" onClick={() => onDecide(true, "chat")}>Allow for this chat</button>
+        <button className="btn" onClick={() => onDecide(true, "always")}>Always allow</button>
+        <span className="spacer" />
+        <button className="btn danger" onClick={() => onDecide(false, "once")}>Deny</button>
       </div>
     </div>
+  );
+}
+
+function CopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button className="icon-btn" title="Copy" aria-label="Copy" onClick={async () => { await copyText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}>
+      {done ? <Check size={15} /> : <Copy size={15} />}
+    </button>
+  );
+}
+
+function Feedback({ id }: { id: string }) {
+  const [v, setV] = useState<string | null>(null);
+  useEffect(() => { void api.getSetting(`feedback:${id}`).then(setV); }, [id]);
+  const set = async (x: "up" | "down") => {
+    const next = v === x ? "none" : x;
+    setV(next);
+    await api.setSetting(`feedback:${id}`, next);
+  };
+  return (
+    <>
+      <button className={`icon-btn ${v === "up" ? "on" : ""}`} title="Good response" aria-label="Good response" aria-pressed={v === "up"} onClick={() => set("up")}><ThumbsUp size={15} /></button>
+      <button className={`icon-btn ${v === "down" ? "on" : ""}`} title="Bad response" aria-label="Bad response" aria-pressed={v === "down"} onClick={() => set("down")}><ThumbsDown size={15} /></button>
+    </>
+  );
+}
+
+function BranchNav({ m, onSwitch }: { m: Message; onSwitch: (id: string) => void }) {
+  if (m.sibling_ids.length < 2) return null;
+  const i = m.sibling_ids.indexOf(m.id);
+  return (
+    <span className="branch-nav" aria-label={`Version ${i + 1} of ${m.sibling_ids.length}`}>
+      <button className="icon-btn" disabled={i <= 0} aria-label="Previous version" onClick={() => onSwitch(m.sibling_ids[i - 1])}><ChevronLeft size={14} /></button>
+      <span>{i + 1} / {m.sibling_ids.length}</span>
+      <button className="icon-btn" disabled={i >= m.sibling_ids.length - 1} aria-label="Next version" onClick={() => onSwitch(m.sibling_ids[i + 1])}><ChevronRight size={14} /></button>
+    </span>
+  );
+}
+
+function RetryMenu({ models, onRetry }: { models: string[]; onRetry: (model?: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="picker" style={{ display: "inline-flex" }}>
+      <button className="icon-btn" title="Retry" aria-label="Retry" onClick={() => onRetry()}><RotateCcw size={15} /></button>
+      <button className="icon-btn" style={{ width: 20, marginLeft: -4 }} title="Retry with another model" aria-label="Retry with another model" onClick={() => setOpen((o) => !o)}><ChevronDown size={14} strokeWidth={2} /></button>
+      {open && (
+        <div className="menu" style={{ position: "absolute", top: 30, left: 0 }} role="menu" onMouseLeave={() => setOpen(false)}>
+          <div className="picker-group">Retry with</div>
+          {models.map((m) => <button key={m} role="menuitem" onClick={() => { setOpen(false); onRetry(m); }}>{m}</button>)}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -70,12 +129,18 @@ export function ChatView({
   onDecide,
   onOpenArtifact,
   onDismissError,
+  initials,
+  retryModels,
+  onSwitchBranch,
 }: {
+  onSwitchBranch: (id: string) => void;
+  initials: string;
+  retryModels: string[];
   messages: Message[];
   live?: LiveRun;
-  onRegenerate: (fromId: string) => void;
+  onRegenerate: (fromId: string, model?: string) => void;
   onEdit: (m: Message, text: string) => void;
-  onDecide: (a: Approval, allow: boolean, remember: boolean) => void;
+  onDecide: (a: Approval, allow: boolean, scope: Scope) => void;
   onOpenArtifact: (a: Artifact) => void;
   onDismissError: () => void;
 }) {
@@ -122,13 +187,18 @@ export function ChatView({
                     </div>
                   ) : (
                     <div className="bubble-user">
-                      {images.map((p, j) => p.type === "image_url" && <img key={j} src={p.image_url.url} alt="attachment" />)}
-                      {text.replace(/<file name="[^"]*">[\s\S]*?<\/file>\n*/g, (f) => `📄 ${/name="([^"]*)"/.exec(f)?.[1]}\n`)}
+                      <span className="avatar small" aria-hidden>{initials}</span>
+                      <div className="bubble-body">
+                        {images.map((p, j) => p.type === "image_url" && <img key={j} src={p.image_url.url} alt="attachment" />)}
+                        {[...text.matchAll(/<file name="([^"]*)">/g)].map((f, j) => <span key={j} className="file-chip"><FileText size={13} /> {f[1]}</span>)}
+                        {text.replace(/<file name="[^"]*">[\s\S]*?<\/file>\n*/g, "")}
+                      </div>
                     </div>
                   )}
                   <div className="msg-actions">
-                    <button className="icon-btn" title="Copy" onClick={() => copyText(text)}>⧉</button>
-                    {!busy && <button className="icon-btn" title="Edit" onClick={() => { setEditing(m.id); setEditText(text); }}>✎</button>}
+                    <BranchNav m={m} onSwitch={onSwitchBranch} />
+                    <CopyBtn text={text} />
+                    {!busy && <button className="icon-btn" title="Edit" aria-label="Edit" onClick={() => { setEditing(m.id); setEditText(text); }}><Pencil size={15} /></button>}
                   </div>
                 </div>
               </div>
@@ -149,10 +219,12 @@ export function ChatView({
               {text && <div className="assistant-body"><Markdown text={text} onOpenArtifact={onOpenArtifact} /></div>}
               {m.tool_calls?.map((c) => <ToolCard key={c.id} name={c.name} args={c.arguments} result={results.get(c.id)} />)}
               {m.status === "error" && <div className="error-box">{m.error}</div>}
-              <Meta m={m} />
-              <div className="msg-actions">
-                {text && <button className="icon-btn" title="Copy" onClick={() => copyText(text)}>⧉</button>}
-                {i === lastAssistantIdx && !busy && <button className="icon-btn" title="Regenerate" onClick={() => onRegenerate(regenFrom)}>↻</button>}
+              <div className="msg-actions always">
+                {!busy && <BranchNav m={m} onSwitch={onSwitchBranch} />}
+                {text && <CopyBtn text={text} />}
+                <Feedback id={m.id} />
+                {i === lastAssistantIdx && !busy && <RetryMenu models={retryModels} onRetry={(model) => onRegenerate(regenFrom, model)} />}
+                <Meta m={m} />
               </div>
             </div>
           );
@@ -174,7 +246,7 @@ export function ChatView({
               live.runId && !live.reasoning && !live.approvals.length && <span className="cursor" />
             )}
             {live.toolNames.map((n, i) => <div key={i} className="muted">Calling {n.replace(/^mcp__/, "").replace("__", " › ")}…</div>)}
-            {live.approvals.map((a) => <ApprovalCard key={a.request_id} a={a} onDecide={(allow, remember) => onDecide(a, allow, remember)} />)}
+            {live.approvals.map((a) => <ApprovalCard key={a.request_id} a={a} onDecide={(allow, scope) => onDecide(a, allow, scope)} />)}
             {live.error && (
               <div className="error-box">
                 {live.error}{" "}

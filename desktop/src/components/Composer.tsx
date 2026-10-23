@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { ArrowUp, FileText, Plus, Square } from "lucide-react";
 import { api, type Attachment, type AttachmentResult, type ContentPart } from "../api";
 
 export function buildContent(text: string, atts: Attachment[]): string | ContentPart[] {
@@ -23,6 +24,7 @@ export function Composer({
   autoFocus,
   focusKey,
   onError,
+  toolsSlot,
 }: {
   onSend: (text: string, atts: Attachment[]) => void;
   onStop?: () => void;
@@ -34,6 +36,7 @@ export function Composer({
   autoFocus?: boolean;
   focusKey?: string;
   onError: (msg: string) => void;
+  toolsSlot?: ReactNode;
 }) {
   const [text, setText] = useState(initialDraft);
   const [atts, setAtts] = useState<Attachment[]>([]);
@@ -84,7 +87,7 @@ export function Composer({
         <div className="chips">
           {atts.map((a, i) => (
             <span className="chip" key={i} title={`${a.name} · ${(a.size / 1024).toFixed(1)} KB`}>
-              {a.kind === "image" && a.data_url ? <img src={a.data_url} alt="" /> : <span>📄</span>}
+              {a.kind === "image" && a.data_url ? <img src={a.data_url} alt="" /> : <FileText size={16} />}
               {a.name}
               <button className="icon-btn" style={{ width: 20, height: 20 }} aria-label={`Remove ${a.name}`} onClick={() => setAtts((x) => x.filter((_, j) => j !== i))}>
                 ×
@@ -121,18 +124,19 @@ export function Composer({
         }}
       />
       <div className="composer-row">
-        <button className="icon-btn" title="Attach files" aria-label="Attach files" onClick={async () => addResults(await api.pickAttachments())}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden><path d="M8 3v10M3 8h10" /></svg>
+        <button className="icon-btn bordered" title="Add files and photos" aria-label="Attach files" onClick={async () => addResults(await api.pickAttachments())}>
+          <Plus size={17} strokeWidth={1.75} />
         </button>
+        {toolsSlot}
         <span className="spacer" />
         {modelSlot}
         {busy ? (
           <button className="send-btn" onClick={onStop} title="Stop (Esc)" aria-label="Stop generating">
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden><rect width="12" height="12" rx="2" fill="currentColor" /></svg>
+            <Square size={12} fill="currentColor" />
           </button>
         ) : (
           <button className="send-btn" onClick={send} disabled={!text.trim() && !atts.length} title="Send (Enter)" aria-label="Send message">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden><path d="M7 12V2M2.5 6.5L7 2l4.5 4.5" /></svg>
+            <ArrowUp size={17} strokeWidth={2.25} />
           </button>
         )}
       </div>

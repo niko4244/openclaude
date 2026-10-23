@@ -4,6 +4,7 @@ mod db;
 mod gateway;
 mod mcp;
 mod probe;
+mod shell;
 mod state;
 
 use chat::{ChatEvent, Run, SendArgs};
@@ -96,10 +97,50 @@ fn get_setting(state: State<'_, Arc<AppState>>, key: String) -> Option<String> {
 
 #[tauri::command]
 fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> Res<()> {
-    if key.starts_with("tool_policy:") && !matches!(value.as_str(), "allow" | "ask" | "block") {
-        return Err("invalid tool policy".into());
-    }
+    check_ui_setting(&key, &value)?;
     state.db.lock().unwrap().set_setting(&key, &value).map_err(e)
+}
+
+/// The UI may only write plain preferences. Security-relevant state (folder grants,
+/// CLI path, probe results, gateway URL) is written by dedicated backend commands.
+fn check_ui_setting(key: &str, value: &str) -> Res<()> {
+    const UI_KEYS: &[&str] = &[
+        "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
+        "mcp_disabled", "extended_thinking", "user_name",
+    ];
+    if key.starts_with("feedback:") {
+        return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
+    }
+    if let Some(_tool) = key.strip_prefix("tool_policy:") {
+        return if matches!(value, "allow" | "ask" | "block") { Ok(()) } else { Err("invalid tool policy".into()) };
+    }
+    if UI_KEYS.contains(&key) { Ok(()) } else { Err(format!("setting `{key}` cannot be changed from the UI")) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_export_shows_roles_and_tools() {
+        let c = Conversation { id: "c".into(), project_id: None, title: "T".into(), model: None, pinned: false, draft: String::new(), created_at: 0, updated_at: 0 };
+        let mk = |role: &str, text: &str| Message { role: role.into(), content: Value::String(text.into()), model_requested: Some("qwen-local".into()), name: Some("echo".into()), ..Default::default() };
+        let md = chat_markdown(&c, &[mk("user", "hi"), mk("assistant", "hello"), mk("tool", "a\nb")]);
+        assert!(md.starts_with("# T"));
+        assert!(md.contains("## You\n\nhi"));
+        assert!(md.contains("## qwen-local\n\nhello"));
+        assert!(md.contains("> Tool `echo` result:\n>\n> a\n> b"));
+    }
+
+    #[test]
+    fn ui_cannot_write_security_settings() {
+        assert!(check_ui_setting("theme", "dark").is_ok());
+        assert!(check_ui_setting("tool_policy:mcp__x__y", "allow").is_ok());
+        assert!(check_ui_setting("tool_policy:mcp__x__y", "yolo").is_err());
+        for k in ["workspaces", "openclaude_cli_path", "gateway_url", "probe:qwen-local", "tray_notice_shown"] {
+            assert!(check_ui_setting(k, "x").is_err(), "{k} must be backend-only");
+        }
+    }
 }
 
 // ---------- projects / conversations
@@ -146,6 +187,51 @@ fn delete_conversation(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
 }
 
 #[tauri::command]
+fn switch_branch(state: State<'_, Arc<AppState>>, conversation_id: String, message_id: String) -> Res<()> {
+    state.db.lock().unwrap().switch_branch(&conversation_id, &message_id).map_err(e)
+}
+
+/// Render a chat as Markdown (visible branch only).
+fn chat_markdown(c: &Conversation, msgs: &[Message]) -> String {
+    let mut out = format!("# {}\n\n", c.title);
+    for m in msgs {
+        let text = match &m.content {
+            Value::String(s) => s.clone(),
+            Value::Array(parts) => parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+            _ => String::new(),
+        };
+        match m.role.as_str() {
+            "user" => out.push_str(&format!("## You\n\n{text}\n\n")),
+            "assistant" if !text.is_empty() => {
+                out.push_str(&format!("## {}\n\n{text}\n\n", m.model_requested.as_deref().unwrap_or("Assistant")))
+            }
+            "tool" => out.push_str(&format!("> Tool `{}` result:\n>\n> {}\n\n", m.name.as_deref().unwrap_or("tool"), text.replace('\n', "\n> "))),
+            _ => {}
+        }
+    }
+    out
+}
+
+#[tauri::command]
+async fn export_chat(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, conversation_id: String) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (conv, msgs) = {
+        let db = state.db.lock().unwrap();
+        (db.get_conversation(&conversation_id).map_err(e)?.ok_or("chat not found")?, db.messages(&conversation_id).map_err(e)?)
+    };
+    let md = chat_markdown(&conv, &msgs);
+    let safe: String = conv.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_file_name(format!("{}.md", safe.trim())).add_filter("Markdown", &["md"]).save_file(move |p| {
+        let _ = tx.send(p);
+    });
+    let Ok(Some(path)) = rx.await else { return Ok(None) };
+    let path = path.into_path().map_err(e)?;
+    std::fs::write(&path, md).map_err(e)?;
+    Ok(Some(path.to_string_lossy().into()))
+}
+
+#[tauri::command]
 fn get_messages(state: State<'_, Arc<AppState>>, conversation_id: String) -> Res<Vec<Message>> {
     state.db.lock().unwrap().messages(&conversation_id).map_err(e)
 }
@@ -181,9 +267,10 @@ fn chat_cancel(state: State<'_, Arc<AppState>>, run_id: String) {
 }
 
 #[tauri::command]
-fn tool_decision(state: State<'_, Arc<AppState>>, request_id: String, allow: bool, remember: bool) {
+fn tool_decision(state: State<'_, Arc<AppState>>, request_id: String, allow: bool, scope: String) {
+    let scope = if matches!(scope.as_str(), "once" | "chat" | "always") { scope } else { "once".into() };
     if let Some(tx) = state.approvals.lock().unwrap().remove(&request_id) {
-        let _ = tx.send((allow, remember));
+        let _ = tx.send((allow, scope));
     }
 }
 
@@ -397,6 +484,12 @@ async fn pick_workspace(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) 
     Ok(Some(path))
 }
 
+/// Previously granted folders that still exist (most recent last).
+#[tauri::command]
+fn list_workspaces(state: State<'_, Arc<AppState>>) -> Vec<String> {
+    granted_workspaces(&state).into_iter().filter(|w| std::path::Path::new(w).is_dir()).collect()
+}
+
 #[tauri::command]
 async fn code_start(
     state: State<'_, Arc<AppState>>,
@@ -445,9 +538,64 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- quick entry / shell
+
+// Window-creating commands must be async: a sync command runs on the main thread,
+// and building a webview there deadlocks on Windows (window stuck at about:blank).
+#[tauri::command]
+async fn quick_entry_toggle(app: tauri::AppHandle) -> Res<()> {
+    shell::toggle_quick(&app).map_err(e)
+}
+
+/// Quick Entry hands its prompt to the main window, which starts a new chat.
+#[tauri::command]
+fn quick_entry_submit(app: tauri::AppHandle, text: String, model: Option<String>) -> Res<()> {
+    if let Some(q) = app.get_webview_window(shell::QUICK) {
+        let _ = q.hide();
+    }
+    shell::show_main(&app);
+    app.emit_to("main", "quick-submit", serde_json::json!({ "text": text, "model": model })).map_err(e)
+}
+
+/// Menu actions reachable from keyboard shortcuts too (zoom lives in the backend).
+#[tauri::command]
+async fn menu_action(app: tauri::AppHandle, id: String) {
+    if matches!(id.as_str(), "zoom_in" | "zoom_out" | "zoom_reset" | "quick_entry") {
+        shell::on_menu(&app, &tauri::menu::MenuEvent { id: tauri::menu::MenuId::new(id) });
+    }
+}
+
+#[tauri::command]
+fn quick_entry_hide(app: tauri::AppHandle) {
+    if let Some(q) = app.get_webview_window(shell::QUICK) {
+        let _ = q.hide();
+    }
+}
+
+// ---------- command runner (Code tab)
+
+#[tauri::command]
+async fn cmd_run(state: State<'_, Arc<AppState>>, cwd: String, command: String, on_event: Channel<agent::CmdEvent>) -> Res<String> {
+    let dir = check_workspace(&state, &cwd)?;
+    if command.trim().is_empty() {
+        return Err("empty command".into());
+    }
+    let id = db::new_id();
+    state.code.run_command(id.clone(), &dir, &command, on_event).await.map_err(e)?;
+    Ok(id)
+}
+
+#[tauri::command]
+async fn cmd_kill(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.code.stop(&id).await;
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct AppInfo {
     version: String,
+    /// OS account name, used only as the default display name.
+    username: String,
     data_dir: String,
     mcp_config: String,
 }
@@ -456,6 +604,7 @@ struct AppInfo {
 fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION").into(),
+        username: std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default(),
         data_dir: state.mcp_config_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
         mcp_config: state.mcp_config_path.to_string_lossy().into(),
     }
@@ -464,12 +613,7 @@ fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
         .register_uri_scheme_protocol("artifact", |ctx, req| serve_artifact(ctx.app_handle(), &req))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -496,11 +640,16 @@ pub fn run() {
                 mcp: Default::default(),
                 runs: Default::default(),
                 approvals: Default::default(),
+                chat_allows: Default::default(),
                 mcp_config_path: mcp_config_path.clone(),
                 artifacts: Default::default(),
                 code: Default::default(),
+                zoom: std::sync::Mutex::new(1.0),
             });
             app.manage(state.clone());
+            app.set_menu(shell::build_menu(app.handle())?)?;
+            app.on_menu_event(|app, e| shell::on_menu(app, &e));
+            shell::build_tray(app.handle())?;
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 state.mcp.set_config(&McpConfig::load(&mcp_config_path)).await;
@@ -516,14 +665,13 @@ pub fn run() {
                     let atts: Vec<_> = paths.iter().map(|p| read_attachment(p)).collect();
                     let _ = window.emit("attachments-dropped", atts);
                 }
-                tauri::WindowEvent::Destroyed => {
-                    if let Some(st) = window.try_state::<Arc<AppState>>() {
-                        let st = st.inner().clone();
-                        tauri::async_runtime::block_on(async move {
-                            st.mcp.stop_all().await;
-                            st.code.stop_all().await;
-                        });
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if shell::intercept_close(window) {
+                        api.prevent_close();
                     }
+                }
+                tauri::WindowEvent::Focused(false) if window.label() == shell::QUICK => {
+                    let _ = window.hide();
                 }
                 _ => {}
             }
@@ -543,6 +691,8 @@ pub fn run() {
             update_conversation,
             delete_conversation,
             get_messages,
+            switch_branch,
+            export_chat,
             chat_send,
             chat_cancel,
             tool_decision,
@@ -556,6 +706,7 @@ pub fn run() {
             pick_attachments,
             artifact_put,
             pick_workspace,
+            list_workspaces,
             code_start,
             code_send,
             code_stop,
@@ -564,7 +715,25 @@ pub fn run() {
             app_info,
             probe_model,
             get_probes,
+            quick_entry_toggle,
+            quick_entry_submit,
+            quick_entry_hide,
+            menu_action,
+            cmd_run,
+            cmd_kill,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running OpenClaude Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building OpenClaude Desktop")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Child processes (MCP servers, agents, commands) must not outlive the app.
+                if let Some(st) = app.try_state::<Arc<AppState>>() {
+                    let st = st.inner().clone();
+                    tauri::async_runtime::block_on(async move {
+                        st.mcp.stop_all().await;
+                        st.code.stop_all().await;
+                    });
+                }
+            }
+        });
 }

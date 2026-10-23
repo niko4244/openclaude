@@ -16,6 +16,8 @@ export type ModelEntry = {
   supports_reasoning: boolean | null;
   supports_json: boolean | null;
   mode: string | null;
+  /** Results of the opt-in capability probe (live requests), keyed by check name. */
+  measured?: Record<string, boolean>;
 };
 
 export type GatewayStatus = {
@@ -70,6 +72,9 @@ export type Message = {
   status: "complete" | "cancelled" | "error";
   error: string | null;
   created_at: number;
+  parent_id: string | null;
+  /** Other versions of this turn (edits/regenerations), oldest first; empty when there is only one. */
+  sibling_ids: string[];
 };
 
 export type ChatEvent =
@@ -145,6 +150,7 @@ export const api = {
   updateConversation: (conversation: Conversation) => invoke<void>("update_conversation", { conversation }),
   deleteConversation: (id: string) => invoke<void>("delete_conversation", { id }),
   getMessages: (conversationId: string) => invoke<Message[]>("get_messages", { conversationId }),
+  switchBranch: (conversationId: string, messageId: string) => invoke<void>("switch_branch", { conversationId, messageId }),
 
   chatSend: (
     conversationId: string,
@@ -158,8 +164,9 @@ export const api = {
     return invoke<string>("chat_send", { conversationId, content, model, replaceFrom, onEvent: ch });
   },
   chatCancel: (runId: string) => invoke<void>("chat_cancel", { runId }),
-  toolDecision: (requestId: string, allow: boolean, remember: boolean) =>
-    invoke<void>("tool_decision", { requestId, allow, remember }),
+  toolDecision: (requestId: string, allow: boolean, scope: "once" | "chat" | "always") =>
+    invoke<void>("tool_decision", { requestId, allow, scope }),
+  exportChat: (conversationId: string) => invoke<string | null>("export_chat", { conversationId }),
 
   mcpStatus: () => invoke<ServerStatus[]>("mcp_status"),
   mcpGetConfig: () => invoke<{ mcpServers: Record<string, ServerConfig> }>("mcp_get_config"),
@@ -173,7 +180,7 @@ export const api = {
   artifactPut: (html: string) => invoke<string>("artifact_put", { html }),
   probeModel: (model: string) => invoke<ProbeReport>("probe_model", { model }),
   getProbes: () => invoke<ProbeReport[]>("get_probes"),
-  appInfo: () => invoke<{ version: string; data_dir: string; mcp_config: string }>("app_info"),
+  appInfo: () => invoke<{ version: string; username: string; data_dir: string; mcp_config: string }>("app_info"),
 };
 
 export function textOf(content: Message["content"]): string {

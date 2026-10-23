@@ -106,7 +106,12 @@ pub fn to_wire(system: &str, history: &[Message]) -> Vec<Value> {
 fn system_prompt(state: &AppState, conversation_id: &str) -> String {
     let db = state.db.lock().unwrap();
     let mut parts = vec![format!(
-        "You are a helpful assistant running inside OpenClaude Desktop. Current date: {}.",
+        "You are a helpful assistant running inside OpenClaude Desktop. Current date: {}.\n\n\
+         When you produce substantial standalone content the user will likely reuse or iterate on (a complete \
+         web page, an SVG image, a document, or a program longer than about 20 lines), put it in one fenced code \
+         block whose info string is the language followed by a short title, for example ```html title=\"Pricing page\". \
+         Use language `markdown` for documents. When revising such content, reuse the same title. \
+         Do not add a title to short snippets.",
         chrono_date()
     )];
     if let Some(g) = db.get_setting("system_prompt").filter(|s| !s.trim().is_empty()) {
@@ -184,7 +189,20 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Chann
         .and_then(|p| p.passed("tools"));
     // Declared or measured "no" wins; unknown still gets tools (the model may surprise us).
     let model_allows_tools = model_meta.as_ref().and_then(|m| m.supports_tools) != Some(false) && probed_tools != Some(false);
-    let tools = if tools_enabled && model_allows_tools { state.mcp.openai_tools(None).await } else { vec![] };
+    let (disabled, thinking): (Vec<String>, bool) = {
+        let db = state.db.lock().unwrap();
+        (
+            db.get_setting("mcp_disabled").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            db.get_setting("extended_thinking").as_deref() == Some("true"),
+        )
+    };
+    let tools: Vec<Value> = if tools_enabled && model_allows_tools {
+        let allowed: Vec<String> = state.mcp.statuses().await.into_iter().map(|s| s.name).filter(|n| !disabled.contains(n)).collect();
+        state.mcp.openai_tools(Some(&allowed)).await
+    } else {
+        vec![]
+    };
+    let extra = thinking.then(|| json!({"reasoning_effort": "high"}));
     let system = system_prompt(state, cid);
     let gateway = state.gateway.read().await.clone();
 
@@ -193,7 +211,7 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Chann
         let wire = to_wire(&system, &history);
         let ch2 = ch.clone();
         let res = gateway
-            .stream_chat(&args.model, &wire, Some(&tools), None, &run.cancel, |d| {
+            .stream_chat(&args.model, &wire, Some(&tools), extra.as_ref(), &run.cancel, |d| {
                 let _ = ch2.send(match d {
                     Delta::Text { text } => ChatEvent::Text { text },
                     Delta::Reasoning { text } => ChatEvent::Reasoning { text },
@@ -245,7 +263,7 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Chann
         }
 
         for call in calls {
-            let (text, is_error) = match execute_tool(state, run, &call, ch).await {
+            let (text, is_error) = match execute_tool(state, run, cid, &call, ch).await {
                 ToolOutcome::Cancelled => return Ok(true),
                 ToolOutcome::Done(t, e) => (t, e),
             };
@@ -271,7 +289,7 @@ enum ToolOutcome {
     Cancelled,
 }
 
-async fn execute_tool(state: &Arc<AppState>, run: &Run, call: &ToolCall, ch: &Channel<ChatEvent>) -> ToolOutcome {
+async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCall, ch: &Channel<ChatEvent>) -> ToolOutcome {
     let Some((server, tool)) = state.mcp.resolve(&call.name).await else {
         return ToolOutcome::Done(format!("Unknown tool `{}`.", call.name), true);
     };
@@ -284,10 +302,11 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, call: &ToolCall, ch: &Ch
     if policy.as_deref() == Some("block") {
         return ToolOutcome::Done("This tool is blocked by the user's settings.".into(), true);
     }
-    let always = policy.as_deref() == Some("allow");
+    let chat_key = (cid.to_string(), call.name.clone());
+    let always = policy.as_deref() == Some("allow") || state.chat_allows.lock().unwrap().contains(&chat_key);
     if !always {
         let request_id = crate::db::new_id();
-        let (tx, rx) = oneshot::channel::<(bool, bool)>();
+        let (tx, rx) = oneshot::channel::<(bool, String)>();
         state.approvals.lock().unwrap().insert(request_id.clone(), tx);
         let _ = ch.send(ChatEvent::ToolApproval { request_id: request_id.clone(), tool: tool.clone(), server: server.clone(), arguments: args.clone() });
         let decision = tokio::select! {
@@ -295,11 +314,15 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, call: &ToolCall, ch: &Ch
             _ = run.cancel.notified() => { state.approvals.lock().unwrap().remove(&request_id); return ToolOutcome::Cancelled; }
         };
         match decision {
-            Some((true, remember)) => {
-                if remember {
+            Some((true, scope)) => match scope.as_str() {
+                "always" => {
                     let _ = state.db.lock().unwrap().set_setting(&policy_key, "allow");
                 }
-            }
+                "chat" => {
+                    state.chat_allows.lock().unwrap().insert(chat_key);
+                }
+                _ => {}
+            },
             _ => return ToolOutcome::Done("The user denied this tool call.".into(), true),
         }
     }
