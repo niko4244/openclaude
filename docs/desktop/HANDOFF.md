@@ -42,31 +42,41 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Release:** `desktop-v0.1.0` published (approved by Nik): https://github.com/niko4244/openclaude/releases/tag/desktop-v0.1.0. The updater feed returns 200.
-- **Nik's decisions:**
-  - Publish: done.
-  - Vision model: pulled `qwen2.5vl:7b` (vision but no tools in Ollama). `gemma4-local` → `gemma4-12b-64k` already has vision and tools.
-  - Visual reference: "you figure it out".
-  - Build the Chrome extension: in progress.
-- **Chrome extension (uncommitted until its E2E passes):**
-  - `desktop/chrome-extension/` (MV3), `src-tauri/src/chrome_bridge.rs` (token + `chrome-extension://` origin on `127.0.0.1:48751`), chat.rs `chrome__*` tools (approval-gated, never background or "always"), and a Settings panel.
-  - Rust 71/71.
-  - `e2e/chrome-extension.e2e.mjs` failed on a non-optimistic toggle. Fixed; re-run pending.
-- **Vision:** the probe's 8×8 1-bit palette PNG is rejected by Ollama ("Failed to load image"). Switching to an RGB PNG, then re-probing `gemma4-local`. If vision works, run live computer use (screenshot only).
-- **Last full gate:** E2E 38/38, a11y 0.
+- **Release:** `desktop-v0.1.0` published (approved by Nik). The updater feed returns 200.
+- **Committed and pushed:** `f76dd670` (Chrome extension, RGB vision probe, visual baselines doc).
+- **Chrome extension E2E:** 4/4 pass.
+- **Computer-use E2E** (`e2e/computer-use.e2e.mjs`, `gemma4-local`):
+  - The screenshot was approved and ran; no permanent allow was stored.
+  - The final reply was HTTP 408 from LiteLLM. A direct replay of the same 1366x768 PNG (739 KB base64) took 148 s and returned empty content.
+  - Fix in progress: smaller screenshots (JPEG, lower max side).
+- **Nik's latest requests (in progress):**
+  1. Port all Claude plugins.
+  2. Include Ponytail (`DietrichGebert/ponytail`, MIT; Claude marketplace + plugin).
+  3. Install Claude plugin repos natively from GitHub.
+  4. Auto-update installed plugins as soon as GitHub has updates.
+- **Plugin design (`src-tauri/src/plugins.rs`, being written):**
+  - Registry at `<data>/plugins/registry.json`.
+  - Git sources: depth-1 clone (sparse for subdirs) into `<data>/plugins/repos/`.
+  - Local sources: read in place (Claude Desktop `%APPDATA%/Claude/rpm/*/*/plugin_<id>`, CLI installs, `~/.claude`, `~/.openclaude` user folders).
+  - Marketplace JSON is read from `raw.githubusercontent.com/<repo>/HEAD/.claude-plugin/marketplace.json`.
+  - Supported source forms: `./sub`, `{source: github|url|git-subdir}`.
+  - Desktop `marketplaceName` mapping:
+    - `knowledge-work-plugins` resolves to `anthropics/knowledge-work-plugins`.
+    - `anthropic-plugin-directory` tries `anthropics/claude-plugins-official`, then the knowledge-work repo, then the `repository` field in plugin.json, then a local reference.
+  - Components:
+    - `skills/*/SKILL.md`, `commands/**/*.md` (`$ARGUMENTS`), `agents/*.md`. Named `plugin:name`; user folders use bare names.
+    - Plugin `.mcp.json` entries go to mcp.json, disabled by default.
+    - SessionStart/UserPromptSubmit `command` hooks run through Git Bash with CLAUDE_PLUGIN_ROOT and an isolated CLAUDE_CONFIG_DIR. Their stdout or `additionalContext` is added to the system prompt.
+  - Chat tools: `skills__search` / `skills__load`; the composer gets a "/" menu.
+  - Auto-update: `git ls-remote` every 15 min; fetch + reset; prev sha kept for rollback; notify only when the plugin subdir tree changed.
+  - First run seeds Ponytail and imports Claude plugins, except when `OPENCLAUDE_DATA_DIR` is set (tests).
+- **Nik's plugins:**
+  - CLI: claude-mem, claude-smart (local npx dir), i-have-adhd.
+  - Desktop: design, data, engineering, brand-voice, cowork-plugin-management (knowledge-work); superdesign, gitkraken, github, superpowers, desktop-commander (official); hive, pdf-viewer (local only); claude-review-loop, remotion (their own GitHub repos).
+- **Last full gate:** E2E 38/38, a11y 0, Rust 71.
 
 ## Next steps (in order)
-1. After the Chrome E2E and vision probe pass:
-   - Commit, then work on visual reference (Nik said figure it out): compare against Anthropic's public Claude Desktop screenshots (help center), layout only, never brand colors.
-2. Remaining partials:
-   - Row 9: no public extension directory exists.
-   - Row 18: computer use needs a vision model on the gateway.
-   - Row 20: a published release; ask Nik first.
-   - Row 24: a Chrome extension; deliberately replaced by the built-in browser.
-   - Visual parity: needs side-by-side reference screenshots (ask Nik).
-3. Remaining parity gaps:
-   - An extension directory (needs a hosted index; none exists for MCPB yet).
-   - Artifact in-panel editing.
-   - Visual side-by-side baselines (needs reference screenshots Nik can provide; don't drive the Claude window, since it hosts this session).
-   - Publishing a signed release (`scripts/release.ps1 -Publish`) is outward-facing. Ask first.
-4. Verify these live when the resources exist: computer use (needs a vision model on the gateway), dictation (needs a mic), and remote MCP OAuth (needs a real provider).
+1. Finish `plugins.rs` and its lib.rs commands, the chat.rs hook/skill wiring, the Settings "Plugins" tab and the Composer "/" menu. Add tests and `e2e/plugins.e2e.mjs`.
+2. Smaller computer-use screenshots, then re-run `e2e/computer-use.e2e.mjs`.
+3. Full gate (rust tests, build, desktop/a11y E2E), update FEATURE_MATRIX/GOAL, commit and push.
+4. Remaining gaps: artifact in-panel editing; Code tab plugin support (CLI-side); non-context hooks (PreToolUse/PostToolUse/Stop) are not ported.
