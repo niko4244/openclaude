@@ -1,0 +1,185 @@
+// Typed bridge to the Rust backend. All privileged work happens there.
+import { Channel, invoke } from "@tauri-apps/api/core";
+
+export type ModelEntry = {
+  id: string;
+  provider: string;
+  backend_model: string | null;
+  backend_host: string | null;
+  local: boolean;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  input_cost_per_mtok: number | null;
+  output_cost_per_mtok: number | null;
+  supports_tools: boolean | null;
+  supports_vision: boolean | null;
+  supports_reasoning: boolean | null;
+  supports_json: boolean | null;
+  mode: string | null;
+};
+
+export type GatewayStatus = {
+  reachable: boolean;
+  authenticated: boolean;
+  base_url: string;
+  latency_ms: number | null;
+  error: string | null;
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  instructions: string;
+  default_model: string | null;
+  updated_at: number;
+};
+
+export type Conversation = {
+  id: string;
+  project_id: string | null;
+  title: string;
+  model: string | null;
+  pinned: boolean;
+  draft: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ToolCall = { id: string; name: string; arguments: string };
+
+export type Message = {
+  id: string;
+  conversation_id: string;
+  seq: number;
+  role: "user" | "assistant" | "tool" | "system";
+  content: string | ContentPart[];
+  reasoning: string | null;
+  tool_calls: ToolCall[] | null;
+  tool_call_id: string | null;
+  name: string | null;
+  model_requested: string | null;
+  model_served: string | null;
+  routed_host: string | null;
+  fallbacks: string | null;
+  usage: Record<string, number | null> | null;
+  cost: number | null;
+  status: "complete" | "cancelled" | "error";
+  error: string | null;
+  created_at: number;
+};
+
+export type ChatEvent =
+  | { type: "started"; run_id: string }
+  | { type: "user_message"; message: Message }
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "tool_call_delta"; index: number; name: string | null }
+  | { type: "assistant_message"; message: Message }
+  | { type: "tool_approval"; request_id: string; tool: string; server: string; arguments: unknown }
+  | { type: "tool_result"; message: Message }
+  | { type: "error"; message: string }
+  | { type: "done"; cancelled: boolean };
+
+export type ToolDef = { name: string; description: string | null; inputSchema: unknown };
+export type ServerStatus = {
+  name: string;
+  transport: string;
+  state: "connected" | "connecting" | "error" | "stopped" | "disabled";
+  error: string | null;
+  server_info: { name?: string; version?: string } | null;
+  tools: ToolDef[];
+  resources: number;
+  prompts: number;
+  log_tail: string[];
+  disabled: boolean;
+};
+export type ServerConfig = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  type?: string;
+  disabled?: boolean;
+};
+export type ImportCandidate = { source: string; path: string; servers: Record<string, ServerConfig> };
+
+export type ProbeReport = {
+  model: string;
+  at_ms: number;
+  served_model: string | null;
+  checks: { name: string; ok: boolean; ms: number; detail: string }[];
+};
+
+export type Attachment = {
+  name: string;
+  mime: string;
+  kind: "image" | "text";
+  text: string | null;
+  data_url: string | null;
+  size: number;
+};
+export type AttachmentResult = { Ok: Attachment } | { Err: string };
+
+export const api = {
+  gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
+  listModels: (refresh = false) => invoke<ModelEntry[]>("list_models", { refresh }),
+  getGatewaySettings: () => invoke<{ base_url: string; has_key: boolean }>("get_gateway_settings"),
+  setGatewaySettings: (baseUrl: string, apiKey: string | null) =>
+    invoke<void>("set_gateway_settings", { baseUrl, apiKey }),
+  getSetting: (key: string) => invoke<string | null>("get_setting", { key }),
+  setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+
+  listProjects: () => invoke<Project[]>("list_projects"),
+  saveProject: (project: Project) => invoke<Project>("save_project", { project }),
+  deleteProject: (id: string) => invoke<void>("delete_project", { id }),
+
+  listConversations: (query?: string, projectId?: string | null) =>
+    invoke<Conversation[]>("list_conversations", { query: query || null, projectId: projectId ?? null }),
+  createConversation: (projectId: string | null, model: string | null) =>
+    invoke<Conversation>("create_conversation", { projectId, model }),
+  updateConversation: (conversation: Conversation) => invoke<void>("update_conversation", { conversation }),
+  deleteConversation: (id: string) => invoke<void>("delete_conversation", { id }),
+  getMessages: (conversationId: string) => invoke<Message[]>("get_messages", { conversationId }),
+
+  chatSend: (
+    conversationId: string,
+    content: string | ContentPart[] | null,
+    model: string,
+    replaceFrom: string | null,
+    onEvent: (e: ChatEvent) => void,
+  ) => {
+    const ch = new Channel<ChatEvent>();
+    ch.onmessage = onEvent;
+    return invoke<string>("chat_send", { conversationId, content, model, replaceFrom, onEvent: ch });
+  },
+  chatCancel: (runId: string) => invoke<void>("chat_cancel", { runId }),
+  toolDecision: (requestId: string, allow: boolean, remember: boolean) =>
+    invoke<void>("tool_decision", { requestId, allow, remember }),
+
+  mcpStatus: () => invoke<ServerStatus[]>("mcp_status"),
+  mcpGetConfig: () => invoke<{ mcpServers: Record<string, ServerConfig> }>("mcp_get_config"),
+  mcpSaveServer: (name: string, config: ServerConfig) => invoke<void>("mcp_save_server", { name, config }),
+  mcpRemoveServer: (name: string) => invoke<void>("mcp_remove_server", { name }),
+  mcpRestart: (name: string) => invoke<void>("mcp_restart", { name }),
+  mcpImportCandidates: () => invoke<ImportCandidate[]>("mcp_import_candidates"),
+  mcpImport: (path: string, names: string[]) => invoke<number>("mcp_import", { path, names }),
+
+  pickAttachments: () => invoke<AttachmentResult[]>("pick_attachments"),
+  artifactPut: (html: string) => invoke<string>("artifact_put", { html }),
+  probeModel: (model: string) => invoke<ProbeReport>("probe_model", { model }),
+  getProbes: () => invoke<ProbeReport[]>("get_probes"),
+  appInfo: () => invoke<{ version: string; data_dir: string; mcp_config: string }>("app_info"),
+};
+
+export function textOf(content: Message["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("\n");
+}

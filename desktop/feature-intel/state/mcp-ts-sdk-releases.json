@@ -1,0 +1,21 @@
+{
+  "checked": "2026-10-23T05:25:30.065Z",
+  "digest": "e169180ba1b23a22",
+  "items": [
+    "v2.3.1 (2026-10-05): 2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/v2.3.1",
+    "1.32.1 (2026-10-05): 1.32.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/1.32.1",
+    "@modelcontextprotocol/server@2.3.1 (2026-10-05): @modelcontextprotocol/server@2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/server%402.3.1",
+    "@modelcontextprotocol/server-legacy@2.3.1 (2026-10-05): @modelcontextprotocol/server-legacy@2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/server-legacy%402.3.1",
+    "@modelcontextprotocol/core@2.3.1 (2026-10-05): @modelcontextprotocol/core@2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/core%402.3.1",
+    "@modelcontextprotocol/codemod@2.3.1 (2026-10-05): @modelcontextprotocol/codemod@2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/codemod%402.3.1",
+    "@modelcontextprotocol/client@2.3.1 (2026-10-05): @modelcontextprotocol/client@2.3.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/client%402.3.1",
+    "v2.3.0 (2026-10-02): 2.3.0 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/v2.3.0",
+    "1.32.0 (2026-10-02): 1.32.0 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/1.32.0",
+    "@modelcontextprotocol/server@2.3.0 (2026-10-02): @modelcontextprotocol/server@2.3.0 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/server%402.3.0",
+    "@modelcontextprotocol/server-legacy@2.3.0 (2026-10-02): @modelcontextprotocol/server-legacy@2.3.0 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/server-legacy%402.3.0",
+    "@modelcontextprotocol/node@2.1.1 (2026-10-02): @modelcontextprotocol/node@2.1.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/node%402.1.1",
+    "@modelcontextprotocol/hono@2.0.2 (2026-10-02): @modelcontextprotocol/hono@2.0.2 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/hono%402.0.2",
+    "@modelcontextprotocol/fastify@2.0.1 (2026-10-02): @modelcontextprotocol/fastify@2.0.1 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/fastify%402.0.1",
+    "@modelcontextprotocol/express@2.0.2 (2026-10-02): @modelcontextprotocol/express@2.0.2 — https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/%40modelcontextprotocol/express%402.0.2"
+  ]
+}
