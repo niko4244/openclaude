@@ -17,6 +17,9 @@ use tokio::sync::Mutex;
 pub enum CodeEvent {
     /// One stream-json record from the CLI, passed through verbatim.
     Agent { record: Value },
+    /// The CLI asked permission to run a tool (`can_use_tool` control request).
+    /// Answer with `CodeSessions::respond`.
+    Approval { request_id: String, tool: String, input: Value },
     Stderr { line: String },
     Exited { code: Option<i32> },
 }
@@ -24,7 +27,9 @@ pub enum CodeEvent {
 pub struct CodeSession {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
-
+    /// request_id -> original tool input of approvals still awaiting an answer
+    /// (an `allow` must echo the input back as `updatedInput`).
+    pending: Mutex<HashMap<String, Value>>,
 }
 
 #[derive(Default)]
@@ -65,6 +70,41 @@ pub fn shell_command(cwd: &Path, command: &str) -> Command {
     c
 }
 
+/// Modes in which the CLI asks (instead of silently denying) and so need the stdio prompt tool.
+fn asks_for_approval(mode: &str) -> bool {
+    matches!(mode, "default" | "acceptEdits")
+}
+
+/// `(request_id, tool_name, input)` of a `can_use_tool` control request record.
+pub fn parse_approval(rec: &Value) -> Option<(String, String, Value)> {
+    if rec.get("type")?.as_str()? != "control_request" {
+        return None;
+    }
+    let req = rec.get("request")?;
+    if req.get("subtype")?.as_str()? != "can_use_tool" {
+        return None;
+    }
+    Some((
+        rec.get("request_id")?.as_str()?.to_string(),
+        req.get("tool_name")?.as_str()?.to_string(),
+        req.get("input").cloned().unwrap_or_else(|| json!({})),
+    ))
+}
+
+/// The exact stdin line the CLI expects: a `control_response` success wrapping a
+/// PermissionPromptToolResult (`{behavior:"allow",updatedInput}` / `{behavior:"deny",message}`).
+pub fn control_response_line(request_id: &str, allow: bool, updated_input: Value, message: Option<String>) -> String {
+    let result = if allow {
+        json!({"behavior": "allow", "updatedInput": updated_input})
+    } else {
+        json!({"behavior": "deny", "message": message.unwrap_or_else(|| "The user denied this action.".into())})
+    };
+    format!(
+        "{}\n",
+        json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": result}})
+    )
+}
+
 pub const PERMISSION_MODES: &[&str] = &["plan", "default", "acceptEdits", "bypassPermissions"];
 
 /// Find the OpenClaude CLI entry point (setting > env > known install locations).
@@ -99,8 +139,11 @@ pub fn build_command(a: &StartArgs) -> Command {
     c.arg(a.cli)
         .args(["--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json"])
         .args(["--provider", "openai", "--model", a.model])
-        .args(["--permission-mode", a.permission_mode])
-        .current_dir(a.cwd)
+        .args(["--permission-mode", a.permission_mode]);
+    if asks_for_approval(a.permission_mode) {
+        c.args(["--permission-prompt-tool", "stdio"]);
+    }
+    c.current_dir(a.cwd)
         .env("CLAUDE_CODE_USE_OPENAI", "1")
         .env("OPENAI_BASE_URL", format!("{}/v1", a.gateway_base.trim_end_matches('/')))
         .env("OPENAI_MODEL", a.model)
@@ -125,7 +168,7 @@ impl CodeSessions {
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        let session = Arc::new(CodeSession { stdin: Mutex::new(stdin), child: Mutex::new(child) });
+        let session = Arc::new(CodeSession { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: Mutex::new(HashMap::new()) });
         self.map.lock().await.insert(id.clone(), session.clone());
 
         let ch2 = ch.clone();
@@ -140,7 +183,12 @@ impl CodeSessions {
             while let Ok(Some(line)) = lines.next_line().await {
                 match serde_json::from_str::<Value>(&line) {
                     Ok(record) => {
-                        let _ = ch.send(CodeEvent::Agent { record });
+                        if let Some((request_id, tool, input)) = parse_approval(&record) {
+                            session.pending.lock().await.insert(request_id.clone(), input.clone());
+                            let _ = ch.send(CodeEvent::Approval { request_id, tool, input });
+                        } else {
+                            let _ = ch.send(CodeEvent::Agent { record });
+                        }
                     }
                     Err(_) => {
                         let _ = ch.send(CodeEvent::Stderr { line });
@@ -158,6 +206,17 @@ impl CodeSessions {
         let msg = json!({"type": "user", "message": {"role": "user", "content": text}});
         let mut w = s.stdin.lock().await;
         w.write_all(format!("{msg}\n").as_bytes()).await?;
+        w.flush().await?;
+        Ok(())
+    }
+
+    /// Answer a pending approval. `allow` with no `updated_input` echoes the original tool input.
+    pub async fn respond(&self, id: &str, request_id: &str, allow: bool, updated_input: Option<Value>, message: Option<String>) -> anyhow::Result<()> {
+        let s = self.map.lock().await.get(id).cloned().ok_or_else(|| anyhow::anyhow!("session not running"))?;
+        let original = s.pending.lock().await.remove(request_id).ok_or_else(|| anyhow::anyhow!("no pending approval {request_id}"))?;
+        let line = control_response_line(request_id, allow, updated_input.unwrap_or(original), message);
+        let mut w = s.stdin.lock().await;
+        w.write_all(line.as_bytes()).await?;
         w.flush().await?;
         Ok(())
     }
@@ -405,11 +464,85 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--model", "coder-local"]));
         assert!(args.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(!args.iter().any(|a| a.contains("dangerously")));
+        assert!(args.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         let env: HashMap<String, String> = std
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_string_lossy().into(), v?.to_string_lossy().into())))
             .collect();
         assert_eq!(env["OPENAI_BASE_URL"], "http://127.0.0.1:4000/v1");
+    }
+
+    fn args_for(mode: &str) -> Vec<String> {
+        let a = StartArgs { cli: Path::new("cli.mjs"), cwd: Path::new("."), model: "m", permission_mode: mode, gateway_base: "http://x", api_key: None };
+        build_command(&a).as_std().get_args().map(|s| s.to_string_lossy().into()).collect()
+    }
+
+    #[test]
+    fn prompt_tool_only_in_asking_modes() {
+        for (mode, want) in [("default", true), ("acceptEdits", true), ("plan", false), ("bypassPermissions", false)] {
+            assert_eq!(args_for(mode).iter().any(|a| a == "--permission-prompt-tool"), want, "{mode}");
+        }
+    }
+
+    #[test]
+    fn parses_can_use_tool_and_ignores_other_records() {
+        let rec = json!({"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"hello.txt","content":"hi"},"tool_use_id":"t1"}});
+        assert_eq!(parse_approval(&rec), Some(("r1".into(), "Write".into(), json!({"file_path":"hello.txt","content":"hi"}))));
+        assert_eq!(parse_approval(&json!({"type":"control_request","request_id":"r","request":{"subtype":"hook_callback"}})), None);
+        assert_eq!(parse_approval(&json!({"type":"assistant","message":{}})), None);
+        assert_eq!(parse_approval(&json!({"type":"control_cancel_request","request_id":"r1"})), None);
+    }
+
+    #[test]
+    fn control_response_matches_cli_schema() {
+        let allow: Value = serde_json::from_str(control_response_line("r1", true, json!({"command":"ls"}), None).trim_end()).unwrap();
+        assert_eq!(allow, json!({"type":"control_response","response":{"subtype":"success","request_id":"r1","response":{"behavior":"allow","updatedInput":{"command":"ls"}}}}));
+        let line = control_response_line("r2", false, json!({}), Some("nope".into()));
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let deny: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(deny, json!({"type":"control_response","response":{"subtype":"success","request_id":"r2","response":{"behavior":"deny","message":"nope"}}}));
+        let dflt: Value = serde_json::from_str(control_response_line("r3", false, json!({}), None).trim_end()).unwrap();
+        assert_eq!(dflt["response"]["response"]["behavior"], "deny");
+        assert!(dflt["response"]["response"]["message"].as_str().is_some_and(|m| !m.is_empty()));
+    }
+
+    /// Live: real CLI + LiteLLM gateway. Needs OPENCLAUDE_LITELLM_KEY (gateway at 127.0.0.1:4000).
+    #[tokio::test]
+    #[ignore]
+    async fn live_cli_asks_then_writes_file_on_allow() {
+        let key = std::env::var("OPENCLAUDE_LITELLM_KEY").expect("OPENCLAUDE_LITELLM_KEY");
+        let (_t, repo) = temp_repo().await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let ch = Channel::<CodeEvent>::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(s) = body {
+                let _ = tx.send(serde_json::from_str(&s).unwrap());
+            }
+            Ok(())
+        });
+        let cli = locate_cli(None).expect("openclaude cli.mjs");
+        let sessions = CodeSessions::default();
+        let a = StartArgs { cli: &cli, cwd: &repo, model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key) };
+        sessions.start("s1".into(), a, ch).await.unwrap();
+        sessions.send("s1", "Create a file named hello.txt containing exactly the word hi. Use the Write tool.").await.unwrap();
+
+        let mut approved = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(240);
+        loop {
+            let ev = tokio::time::timeout_at(deadline, rx.recv()).await.expect("timed out").expect("channel closed");
+            match ev["type"].as_str() {
+                Some("approval") => {
+                    assert!(!repo.join("hello.txt").exists(), "file written before approval");
+                    sessions.respond("s1", ev["request_id"].as_str().unwrap(), true, None, None).await.unwrap();
+                    approved = true;
+                }
+                Some("agent") if ev["record"]["type"] == "result" => break,
+                Some("exited") => break,
+                _ => {}
+            }
+        }
+        sessions.stop_all().await;
+        assert!(approved, "never received a can_use_tool approval");
+        assert!(repo.join("hello.txt").exists(), "hello.txt missing after allow");
     }
 
     #[tokio::test]

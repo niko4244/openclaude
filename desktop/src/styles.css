@@ -249,7 +249,7 @@ details.reasoning div { white-space: pre-wrap; border-left: 2px solid var(--bord
 .settings-inner { max-width: 980px; margin: 0 auto; padding: 28px 28px 60px; }
 .page-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .page h1, .settings h1, .page h2, .settings h2 { font-family: var(--font-serif); font-weight: 400; font-size: 30px; margin: 0; letter-spacing: -0.01em; }
-.settings h3 { font-size: 15px; margin: 26px 0 8px; }
+.settings h3, .settings h2.section-h { font-size: 15px; font-family: var(--font); font-weight: 600; margin: 26px 0 8px; letter-spacing: 0; }
 .page-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); background: var(--bg-elev); border-radius: 12px; padding: 9px 12px; }
 .page-search input { flex: 1; border: 0; outline: none; background: transparent; font-size: 15px; }
 .list { border-top: 1px solid var(--border); }
@@ -328,3 +328,6 @@ table.models td.unk { color: var(--text-faint); }
 .task-row { display: flex; align-items: center; gap: 10px; padding: 10px 6px; border-bottom: 1px solid var(--border); }
 .task-main { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: transparent; text-align: left; padding: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.quick-recents { display: flex; gap: 6px; overflow: hidden; margin: 2px 0 6px; }
+.quick-recents .chip-btn { padding: 3px 9px; font-size: 12px; max-width: 160px; }
+.quick-recent-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

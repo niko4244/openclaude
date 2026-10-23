@@ -1,4 +1,5 @@
 mod agent;
+mod browser;
 mod chat;
 mod computer;
 mod mcp_oauth;
@@ -113,7 +114,7 @@ fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> R
 fn check_ui_setting(key: &str, value: &str) -> Res<()> {
     const UI_KEYS: &[&str] = &[
         "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
-        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled",
+        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled",
     ];
     if key.starts_with("feedback:") {
         return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
@@ -589,6 +590,28 @@ fn artifact_put(state: State<'_, Arc<AppState>>, html: String) -> String {
     if cfg!(windows) { format!("http://artifact.localhost/{id}") } else { format!("artifact://localhost/{id}") }
 }
 
+/// Save an artifact through a native save dialog (the UI never picks the path itself).
+#[tauri::command]
+async fn artifact_save(app: tauri::AppHandle, title: String, language: String, code: String) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let ext = match language.as_str() {
+        "html" => "html", "svg" => "svg", "markdown" | "md" => "md", "javascript" | "js" => "js",
+        "typescript" | "ts" => "ts", "tsx" => "tsx", "jsx" => "jsx", "python" | "py" => "py", "rust" | "rs" => "rs",
+        "json" => "json", "css" => "css", "sql" => "sql", "bash" | "sh" => "sh", "powershell" | "ps1" => "ps1",
+        "yaml" | "yml" => "yaml", "csv" => "csv", "go" => "go", "java" => "java", "c" => "c", "cpp" => "cpp",
+        _ => "txt",
+    };
+    let stem: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_file_name(format!("{}.{ext}", stem.trim())).save_file(move |p| {
+        let _ = tx.send(p);
+    });
+    let Ok(Some(path)) = rx.await else { return Ok(None) };
+    let path = path.into_path().map_err(e)?;
+    std::fs::write(&path, code).map_err(e)?;
+    Ok(Some(path.to_string_lossy().into()))
+}
+
 /// Artifacts get their own origin and a CSP that cannot reach the IPC endpoint,
 /// and the iframe is additionally sandboxed without `allow-same-origin`.
 fn serve_artifact(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
@@ -715,6 +738,12 @@ async fn code_start(
 }
 
 #[tauri::command]
+async fn code_approve(state: State<'_, Arc<AppState>>, session_id: String, request_id: String, allow: bool) -> Res<()> {
+    let msg = (!allow).then(|| "The user denied this action in OpenClaude Desktop.".to_string());
+    state.code.respond(&session_id, &request_id, allow, None, msg).await.map_err(e)
+}
+
+#[tauri::command]
 async fn code_send(state: State<'_, Arc<AppState>>, session_id: String, text: String) -> Res<()> {
     state.code.send(&session_id, &text).await.map_err(e)
 }
@@ -775,6 +804,16 @@ async fn menu_action(app: tauri::AppHandle, id: String) {
     if matches!(id.as_str(), "zoom_in" | "zoom_out" | "zoom_reset" | "quick_entry" | "quit") {
         shell::on_menu(&app, &tauri::menu::MenuEvent { id: tauri::menu::MenuId::new(id) });
     }
+}
+
+/// Quick Entry recents: jump to an existing chat in the main window.
+#[tauri::command]
+fn quick_entry_open(app: tauri::AppHandle, conversation_id: String) -> Res<()> {
+    if let Some(q) = app.get_webview_window(shell::QUICK) {
+        let _ = q.hide();
+    }
+    shell::show_main(&app);
+    app.emit_to("main", "open-chat", conversation_id).map_err(e)
 }
 
 #[tauri::command]
@@ -957,6 +996,8 @@ pub fn run() {
             extension_install,
             pick_attachments,
             artifact_put,
+            artifact_save,
+            quick_entry_open,
             pick_workspace,
             list_workspaces,
             worktree_list,
@@ -965,6 +1006,7 @@ pub fn run() {
             preview_open,
             code_start,
             code_send,
+            code_approve,
             code_stop,
             git_status,
             git_diff,
@@ -989,6 +1031,7 @@ pub fn run() {
                     tauri::async_runtime::block_on(async move {
                         st.mcp.stop_all().await;
                         st.code.stop_all().await;
+                        browser::shutdown().await;
                     });
                 }
             }

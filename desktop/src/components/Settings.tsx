@@ -128,6 +128,7 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
       </div>
       <SttField toast={toast} />
       <ComputerUseField />
+      <BrowserToolsField />
       <div className="field">
         <label htmlFor="hk">Quick entry shortcut</label>
         <input id="hk" value={hotkey} onChange={(e) => setHotkey(e.target.value)} placeholder="CommandOrControl+Alt+Space" />
@@ -317,7 +318,7 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
 
       {cands.length > 0 && (
         <>
-          <h3>Import from other apps</h3>
+          <h2 className="section-h">Import from other apps</h2>
           <p className="muted">Read-only scan of existing registries. Importing copies the entry into OpenClaude’s own config; the source file is never modified.</p>
           {cands.map((c) => (
             <div className="card" key={c.path}>
@@ -335,7 +336,7 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
         </>
       )}
 
-      <h3>Add a connector</h3>
+      <h2 className="section-h">Add a connector</h2>
       <div className="field"><label>Name</label><input aria-label="Connector name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="filesystem" /></div>
       <div className="field"><label>Command (stdio)</label><input aria-label="Command" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} placeholder="npx" /></div>
       <div className="field"><label>Arguments</label><input aria-label="Arguments" value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })} placeholder='-y @modelcontextprotocol/server-filesystem "C:\Users\me\Documents"' /></div>
@@ -383,7 +384,7 @@ function Projects({ projects, models, onChanged, toast }: { projects: Project[];
           {p.instructions && <div className="muted" style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{p.instructions.slice(0, 300)}</div>}
         </div>
       ))}
-      <h3>{edit.id ? `Edit “${edit.name}”` : "New project"}</h3>
+      <h2 className="section-h">{edit.id ? `Edit “${edit.name}”` : "New project"}</h2>
       <div className="field"><label>Name</label><input aria-label="Project name" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></div>
       <div className="field"><label>Instructions</label><textarea aria-label="Project instructions" value={edit.instructions} onChange={(e) => setEdit({ ...edit, instructions: e.target.value })} placeholder="Context and rules every chat in this project should follow." /></div>
       <div className="field">
@@ -503,6 +504,17 @@ function ComputerUseField() {
     <div className="field">
       <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("computer_use_enabled", String(e.target.checked)); }} /> Computer use (experimental)</label>
       <span className="help">Lets the model see your primary screen and control the mouse and keyboard. Every action asks for approval (at most “for this chat”, never permanently); background tasks can never use it; locking the screen and Ctrl+Alt+Delete are always blocked. Needs a vision-capable model. Press Esc to stop.</span>
+    </div>
+  );
+}
+
+function BrowserToolsField() {
+  const [on, setOn] = useState(false);
+  useEffect(() => { void api.getSetting("browser_tools_enabled").then((v) => setOn(v === "true")); }, []);
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("browser_tools_enabled", String(e.target.checked)); }} /> Browser tools</label>
+      <span className="help">Lets the model browse the web in a separate Edge/Chrome window with its own profile (your normal browser, cookies and logins are never used). Every action asks for approval unless you allow it; page content is treated as untrusted.</span>
     </div>
   );
 }

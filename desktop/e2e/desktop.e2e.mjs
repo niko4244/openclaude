@@ -347,6 +347,29 @@ try {
   const prefilled = await p2.waitForFunction(() => document.querySelector(".home .composer textarea")?.value === "Hello from a link", null, { timeout: 15000 }).then(() => true, () => false);
   record("deep link prefills a new chat (not sent)", prefilled && (await p2.locator(".conv-item").count()) === before2);
 
+  // 18. built-in browser tools: enable in Settings, model navigates + reads a local page, approvals per chat
+  const http = await import("node:http");
+  const pageSrv = http.createServer((_, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end("<title>Marker page</title><h1>The magic marker is ORCHID-58</h1>"); });
+  await new Promise((r) => pageSrv.listen(0, "127.0.0.1", r));
+  const pageUrl = `http://127.0.0.1:${pageSrv.address().port}/`;
+  await p2.keyboard.press("Control+,");
+  await p2.click('button[role="tab"]:has-text("General")');
+  await p2.locator('label:has-text("Browser tools") input[type="checkbox"]').check();
+  await p2.click('button:has-text("Done")');
+  await p2.keyboard.press("Control+n");
+  await sendMessage(p2, `Use the browser tools: navigate to ${pageUrl} then read the page and tell me the magic marker.`);
+  for (let i = 0; i < 4; i++) {
+    const ap = await p2.waitForSelector(".approval", { timeout: 60000 }).catch(() => null);
+    if (!ap) break;
+    await p2.click('.approval button:has-text("Allow for this chat")');
+    await sleep(500);
+    if (!(await p2.locator('.send-btn[aria-label="Stop generating"]').count())) break;
+  }
+  await waitIdle(p2, 180000);
+  const br = await lastAssistantText(p2);
+  record("browser tools read a live page", /ORCHID-58/.test(br), JSON.stringify(br.slice(0, 80)));
+  pageSrv.close();
+
   // 16. update check reports a status (no release is published yet, so a failure message is expected)
   await p2.keyboard.press("Control+,");
   await p2.click('button[role="tab"]:has-text("About")');

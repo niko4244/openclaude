@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { api } from "../api";
 import { copyText, Markdown, type Artifact } from "./Markdown";
 
@@ -38,6 +39,7 @@ export function ArtifactPanel({ artifact, versions = [], onSelect, onClose }: { 
           </div>
         )}
         <button className="btn" onClick={() => copyText(artifact.code)}>Copy</button>
+        <button className="btn" onClick={() => void invoke("artifact_save", { title: artifact.title, language: artifact.language, code: artifact.code })}>Download</button>
         <button className="icon-btn" onClick={onClose} aria-label="Close artifact">✕</button>
       </div>
       <div className="artifact-body">

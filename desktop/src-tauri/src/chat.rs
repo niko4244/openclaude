@@ -246,6 +246,9 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         if state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() == Some("true") {
             tools.extend(crate::computer::tool_defs());
         }
+        if state.db.lock().unwrap().get_setting("browser_tools_enabled").as_deref() == Some("true") {
+            tools.extend(crate::browser::tool_defs());
+        }
         tools
     } else {
         vec![]
@@ -420,8 +423,15 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
     if is_computer && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
         return ToolOutcome::Done("Computer use is disabled in Settings.".into(), true, None);
     }
+    // Browser tools drive a dedicated browser profile; background runs need "Always allow" like any tool.
+    let is_browser = call.name.starts_with("browser__");
+    if is_browser && state.db.lock().unwrap().get_setting("browser_tools_enabled").as_deref() != Some("true") {
+        return ToolOutcome::Done("Browser tools are disabled in Settings.".into(), true, None);
+    }
     let (server, tool) = if is_computer {
         ("computer".to_string(), call.name.trim_start_matches("computer__").to_string())
+    } else if is_browser {
+        ("browser".to_string(), call.name.trim_start_matches("browser__").to_string())
     } else {
         match state.mcp.resolve(&call.name).await {
             Some(t) => t,
@@ -468,6 +478,16 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
             },
             _ => return ToolOutcome::Done("The user denied this tool call.".into(), true, None),
         }
+    }
+    if is_browser {
+        let profile = state.mcp_config_path.parent().map(|p| p.join("browser-profile")).unwrap_or_default();
+        return tokio::select! {
+            r = crate::browser::execute(&call.name, &args, &profile) => match r {
+                Ok(o) => ToolOutcome::Done(cap(o.text), false, o.image_data_url),
+                Err(e) => ToolOutcome::Done(format!("Browser error: {e}"), true, None),
+            },
+            _ = run.cancel.notified() => ToolOutcome::Cancelled,
+        };
     }
     if is_computer {
         return tokio::select! {

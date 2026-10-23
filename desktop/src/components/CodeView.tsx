@@ -7,6 +7,7 @@ import { Terminal } from "./Terminal";
 
 type CodeEvent =
   | { type: "agent"; record: AgentRecord }
+  | { type: "approval"; request_id: string; tool: string; input: unknown }
   | { type: "stderr"; line: string }
   | { type: "exited"; code: number | null };
 type Block = { type: string; text?: string; name?: string; input?: unknown; content?: unknown; tool_use_id?: string; is_error?: boolean };
@@ -20,15 +21,17 @@ type AgentRecord = {
   total_cost_usd?: number;
   duration_ms?: number;
   is_error?: boolean;
+  request_id?: string;
 };
 type GitStatus = { is_repo: boolean; branch: string | null; files: [string, string][]; error: string | null };
 type Worktree = { path: string; branch: string | null; head: string };
-type Entry = { kind: "user" | "text" | "tool" | "result" | "system" | "log"; text: string; title?: string; err?: boolean };
+type ApprovalState = "pending" | "allowed" | "denied" | "cancelled";
+type Entry = { kind: "user" | "text" | "tool" | "result" | "system" | "log" | "approval"; text: string; title?: string; err?: boolean; requestId?: string; state?: ApprovalState };
 
 const MODES: [string, string][] = [
   ["plan", "Plan only (read-only)"],
-  ["default", "Ask (edits/commands denied unless allowed)"],
-  ["acceptEdits", "Auto-accept file edits in this folder"],
+  ["default", "Ask before edits and commands"],
+  ["acceptEdits", "Auto-accept edits, ask for commands"],
   ["bypassPermissions", "Bypass all permissions (dangerous)"],
 ];
 
@@ -97,7 +100,21 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
 
   const push = (e: Entry) => setEntries((xs) => [...xs, e]);
 
+  const setApproval = (requestId: string, state: ApprovalState) =>
+    setEntries((xs) => xs.map((x) => (x.kind === "approval" && x.requestId === requestId ? { ...x, state } : x)));
+  const decide = async (requestId: string, allow: boolean) => {
+    if (!session) return;
+    setApproval(requestId, allow ? "allowed" : "denied");
+    try {
+      await invoke("code_approve", { sessionId: session, requestId, allow });
+    } catch (e) {
+      setApproval(requestId, "pending");
+      setErr(String(e));
+    }
+  };
+
   const onEvent = (e: CodeEvent) => {
+    if (e.type === "approval") return push({ kind: "approval", title: e.tool, text: JSON.stringify(e.input, null, 2), requestId: e.request_id, state: "pending" });
     if (e.type === "stderr") return push({ kind: "log", text: e.line });
     if (e.type === "exited") {
       setSession(null);
@@ -105,7 +122,8 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
       return push({ kind: "system", text: `Agent exited (code ${e.code ?? "?"})` });
     }
     const r = e.record;
-    if (r.type === "system" && r.subtype === "init") push({ kind: "system", text: `Agent ready · model ${r.model} · ${r.tools?.length ?? 0} tools` });
+    if (r.type === "control_cancel_request" && r.request_id) setApproval(r.request_id, "cancelled");
+    else if (r.type === "system" && r.subtype === "init") push({ kind: "system", text: `Agent ready · model ${r.model} · ${r.tools?.length ?? 0} tools` });
     else if (r.type === "assistant" && Array.isArray(r.message?.content)) {
       for (const b of r.message!.content as Block[]) {
         if (b.type === "text" && b.text) push({ kind: "text", text: b.text });
@@ -179,6 +197,18 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
               : e.kind === "text" ? <div key={i} className="assistant-body"><Markdown text={e.text} /></div>
               : e.kind === "tool" ? (
                 <details key={i} className="tool-card"><summary><span className={`dot ${e.err ? "err" : "ok"}`} /><span className="mono">{e.title}</span></summary><pre>{e.text}</pre></details>
+              )
+              : e.kind === "approval" ? (
+                <div key={i} className="tool-card" role="group" aria-label={`Permission request for ${e.title}`} style={{ padding: "8px 12px", border: "1px solid var(--border, #8884)", borderRadius: 8 }}>
+                  <div><strong>Allow {e.title}?</strong> <span className="muted">{e.state === "pending" ? "The agent is waiting for your answer." : e.state}</span></div>
+                  <pre style={{ maxHeight: 220, overflow: "auto" }}>{e.text}</pre>
+                  {e.state === "pending" && (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn" onClick={() => void decide(e.requestId!, true)}>Allow</button>
+                      <button className="btn" onClick={() => void decide(e.requestId!, false)}>Deny</button>
+                    </div>
+                  )}
+                </div>
               )
               : e.kind === "log" ? <div key={i} className="muted mono" style={{ fontSize: 11 }}>{e.text}</div>
               : <div key={i} className="meta" style={{ color: e.err ? "var(--err)" : undefined }}>{e.text}</div>,

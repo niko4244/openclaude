@@ -40,7 +40,7 @@ pub fn toggle_quick(app: &AppHandle) -> tauri::Result<()> {
     // The frontend picks its Quick Entry UI from the window label.
     let w = WebviewWindowBuilder::new(app, QUICK, WebviewUrl::App("index.html".into()))
         .title("OpenClaude Quick Entry")
-        .inner_size(680.0, 150.0)
+        .inner_size(680.0, 176.0)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)

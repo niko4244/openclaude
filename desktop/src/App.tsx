@@ -187,10 +187,12 @@ export default function App() {
     const u2 = listen<{ text: string; model: string | null }>("quick-submit", (e) => quickRef.current(e.payload));
     // openclaude://new?prompt=… prefills a new chat; the user still presses Send.
     const u3 = listen<string>("deep-link-new", (e) => menuRef.current(`deep:${e.payload}`));
+    const u4 = listen<string>("open-chat", (e) => menuRef.current(`open:${e.payload}`));
     return () => {
       void u1.then((f) => f());
       void u2.then((f) => f());
       void u3.then((f) => f());
+      void u4.then((f) => f());
     };
   }, []);
 
@@ -256,6 +258,10 @@ export default function App() {
   };
 
   menuRef.current = (id: string) => {
+    if (id.startsWith("open:")) {
+      void refreshConvs();
+      return openChat(id.slice(5));
+    }
     if (id.startsWith("deep:")) {
       newChat();
       setSeed({ key: `deep-${Date.now()}`, text: id.slice(5) });
@@ -298,7 +304,8 @@ export default function App() {
   return (
     <div className="shell">
     <TitleBar onMenu={(id) => menuRef.current(id)} />
-    <div className="app">
+    {/* While a dialog is open the page behind it is inert (not focusable, hidden from assistive tech). */}
+    <div className="app" inert={searchOpen || sheetOpen || undefined} aria-hidden={searchOpen || sheetOpen || undefined}>
       <Sidebar
         collapsed={collapsed}
         conversations={convs}
@@ -452,8 +459,7 @@ export default function App() {
           </>
         )}
       </main>
-      {searchOpen && <SearchPalette onOpen={openChat} onClose={() => setSearchOpen(false)} />}
-      {sheetOpen && <ShortcutsSheet onClose={() => setSheetOpen(false)} />}
+
       {artifact && page === "chat" && (
         <ArtifactPanel
           artifact={versionsOf(artifact.title).find((v) => v.code === artifact.code) ?? artifact}
@@ -464,6 +470,8 @@ export default function App() {
       )}
       {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
     </div>
+    {searchOpen && <SearchPalette onOpen={openChat} onClose={() => setSearchOpen(false)} />}
+    {sheetOpen && <ShortcutsSheet onClose={() => setSheetOpen(false)} />}
     </div>
   );
 }
