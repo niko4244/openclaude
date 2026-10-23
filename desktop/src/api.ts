@@ -224,6 +224,10 @@ export const api = {
   registrySearch: (query: string | null, cursor: string | null) => invoke<RegistryPage>("registry_search", { query, cursor }),
 
   pluginsList: () => invoke<PluginView[]>("plugins_list"),
+  syncStatus: () => invoke<SyncStatus>("sync_status"),
+  syncNow: () => invoke<SyncStatus>("sync_now"),
+  syncChooseFolder: () => invoke<SyncStatus>("sync_choose_folder"),
+  syncOff: () => invoke<SyncStatus>("sync_off"),
   pluginInspect: (spec: string) => invoke<PluginOffer>("plugin_inspect", { spec }),
   pluginInstall: (spec: string, names: string[]) => invoke<string[]>("plugin_install", { spec, names }),
   pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
@@ -288,3 +292,4 @@ export type PluginView = {
 export type PluginOffer = { repo: string; marketplace: string | null; items: { name: string; description: string; source: PluginSource | null; note: string | null }[] };
 export type PluginCandidate = { key: string; name: string; origin: string; local: string; github: PluginSource | null; user_scope: boolean; imported: boolean };
 export type SlashCommand = { kind: "skill" | "command" | "agent"; name: string; plugin: string; description: string; arg_hint: string | null; path: string };
+export type SyncStatus = { folder: string | null; device_name: string; last_at: number; devices: string[]; error: string | null };

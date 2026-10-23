@@ -1,8 +1,8 @@
 # Visual Baselines: placeholder & capture plan
 
-Status: **placeholder**. No screenshots of the reference app are stored. The landmarks below come
-from static assets and window options in the pristine 3.6556.2 archive (`REA_EVIDENCE.md` E-25,
-E-06). Values are facts about window geometry, not copied assets.
+Status: **layout geometry measured; no reference screenshots stored.** The landmarks below come from static assets
+and window options in the pristine 3.6556.2 archive (`REA_EVIDENCE.md` E-25, E-06) and, since 2026-10-23, from the layout
+tokens in the installed app's bundled web UI (§1b). Values are facts about geometry, not copied assets.
 
 ## 1. Known geometry (static)
 
@@ -17,6 +17,22 @@ E-06). Values are facts about window geometry, not copied assets.
 | Quick Entry | Floating, small. Size not extracted (inferred about 600 wide) | Position persisted; kept inside the work area |
 | Fonts | Anthropic Sans / Anthropic Serif variable fonts (proprietary, do NOT reuse) | OC must pick its own type stack |
 | HTML theme attributes (bundled SPA) | `data-theme`, `data-mode=system`, `data-density=comfortable` | Shows light/dark/system and density modes exist |
+
+## 1b. Layout tokens measured from the bundled web UI (3.6556.2, `resources/ion-dist/assets/v1/*.css`)
+
+Read statically from the CSS custom properties (the bundle could not be rendered offline: it needs its backend and shows
+an error boundary even with a mocked bootstrap). Only geometry is adopted; palette, fonts and assets stay original.
+
+| Token (reference) | Reference value | OpenClaude before | OpenClaude now |
+|---|---|---|---|
+| `--df-sidebar-width` | 288 px | 288 px | 288 px |
+| `--chat-column-measure` / `--max-content-width` | 768 px default (960 / 1280 wide variants) | 712 px content | 768 px (`--chat-measure`) |
+| `--cds-radius-composer` | 18 px (14 px compact) | 20 px | 18 px |
+| `--cds-radius` | 8 px (6 px compact) | 10 px | 8 px |
+| `--chat-body` / `--chat-leading` | 15 px / 1.4667 (14 px / 1.4286 compact) | 15.5 px / 1.7 | 15 px / 1.4667 |
+| `--cds-font-size-body` | 14 px | 14 px | 14 px |
+| `--cds-font-size-title` | 20–22 px | n/a | unchanged |
+| `--session-rail-w` (Code session rail) | 280 px | n/a | not adopted |
 
 ## 2. Landmarks to baseline (per screen)
 1. Shell: title row, window controls region, sidebar (collapsed/expanded), main content, composer.
@@ -42,8 +58,8 @@ Each in light + dark, at 100% and 150% scale, window sizes 1200×800 and 720×56
   original and not a copy.
 
 ## 4. Open items
-- Sidebar width, composer max width and message column width live in the remote web app's CSS and
-  were not extracted statically. Measure them from user-provided screenshots.
+- Sidebar width, column measure, composer radius and chat type scale: measured (§1b).
+- Pixel-level comparison still needs reference screenshots (drop them into `docs/parity/reference/`).
 - Quick Entry exact size and corner radius are unknown.
 
 ## OpenClaude baselines (2026-10-23)

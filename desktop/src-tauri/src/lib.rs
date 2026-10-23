@@ -17,6 +17,7 @@ mod registry;
 mod shell;
 mod sigverify;
 mod state;
+mod sync;
 mod tasks;
 
 use chat::{ChatEvent, Run, SendArgs};
@@ -110,7 +111,10 @@ fn get_setting(state: State<'_, Arc<AppState>>, key: String) -> Option<String> {
 #[tauri::command]
 fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> Res<()> {
     check_ui_setting(&key, &value)?;
-    state.db.lock().unwrap().set_setting(&key, &value).map_err(e)
+    let db = state.db.lock().unwrap();
+    db.set_setting(&key, &value).map_err(e)?;
+    sync::note_pref_change(&db, &key);
+    Ok(())
 }
 
 /// The UI may only write plain preferences. Security-relevant state (folder grants,
@@ -207,7 +211,10 @@ fn project_remove_file(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
 
 #[tauri::command]
 fn delete_project(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
-    state.db.lock().unwrap().delete_project(&id).map_err(e)
+    let db = state.db.lock().unwrap();
+    db.delete_project(&id).map_err(e)?;
+    sync::tombstone(&db, "project", &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -228,7 +235,10 @@ fn update_conversation(state: State<'_, Arc<AppState>>, conversation: Conversati
 
 #[tauri::command]
 fn delete_conversation(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
-    state.db.lock().unwrap().delete_conversation(&id).map_err(e)
+    let db = state.db.lock().unwrap();
+    db.delete_conversation(&id).map_err(e)?;
+    sync::tombstone(&db, "conversation", &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -781,6 +791,70 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- sync (local-first, through a folder the user's cloud drive syncs)
+
+static SYNC: std::sync::LazyLock<std::sync::Mutex<sync::Memory>> = std::sync::LazyLock::new(Default::default);
+
+/// One pass; returns the status and whether this database changed.
+fn sync_pass(state: &AppState) -> (sync::Status, bool) {
+    let mut mem = SYNC.lock().unwrap();
+    let db = state.db.lock().unwrap();
+    let changed = sync::run_once(&db, &mut mem).unwrap_or_else(|err| {
+        mem.status.error = Some(err.to_string());
+        false
+    });
+    (mem.status.clone(), changed)
+}
+
+#[tauri::command]
+fn sync_status() -> sync::Status {
+    SYNC.lock().unwrap().status.clone()
+}
+
+#[tauri::command]
+async fn sync_now(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<sync::Status> {
+    let (st, changed) = sync_pass(&state);
+    if changed {
+        let _ = app.emit("sync-changed", ());
+    }
+    Ok(st)
+}
+
+/// The folder comes from the native picker only; the UI never sends a path.
+#[tauri::command]
+async fn sync_choose_folder(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<sync::Status> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |f| {
+        let _ = tx.send(f);
+    });
+    if let Ok(Some(dir)) = rx.await {
+        let path = dir.into_path().map_err(e)?.to_string_lossy().to_string();
+        state.db.lock().unwrap().set_setting("sync_folder", &path).map_err(e)?;
+    }
+    sync_now(app, state).await
+}
+
+#[tauri::command]
+fn sync_off(state: State<'_, Arc<AppState>>) -> Res<sync::Status> {
+    state.db.lock().unwrap().set_setting("sync_folder", "").map_err(e)?;
+    let mut mem = SYNC.lock().unwrap();
+    mem.status.folder = None;
+    Ok(mem.status.clone())
+}
+
+fn start_sync(state: Arc<AppState>, app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let has = sync::folder(&state.db.lock().unwrap()).is_some();
+            if has && sync_pass(&state).1 {
+                let _ = app.emit("sync-changed", ());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+}
+
 // ---------- plugins (Claude format)
 
 #[derive(Serialize)]
@@ -1225,6 +1299,7 @@ pub fn run() {
             }
             tasks::start_scheduler(state.clone(), app.handle().clone());
             start_plugin_updater(state.clone(), app.handle().clone());
+            start_sync(state.clone(), app.handle().clone());
             if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") {
                 start_chrome_bridge(&state);
             }
@@ -1329,6 +1404,10 @@ pub fn run() {
             slash_commands,
             slash_expand,
             plugin_context_preview,
+            sync_status,
+            sync_now,
+            sync_choose_folder,
+            sync_off,
             quick_entry_submit,
             quick_entry_hide,
             menu_action,

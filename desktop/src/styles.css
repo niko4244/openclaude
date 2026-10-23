@@ -20,8 +20,10 @@
   --err: #c2413b;
   --code-bg: #1d1d20;
   --code-text: #e6e6e6;
-  --radius: 10px;
-  --radius-lg: 20px;
+  /* Geometry measured from the reference app's layout tokens (VISUAL_BASELINES.md §1b); palette and type are our own. */
+  --radius: 8px;
+  --radius-lg: 18px;
+  --chat-measure: 768px;
   --shadow-sm: 0 1px 2px rgba(30, 20, 0, 0.05);
   --shadow: 0 1px 2px rgba(30, 20, 0, 0.05), 0 6px 24px rgba(30, 20, 0, 0.07);
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -150,7 +152,7 @@ input, textarea, select { font: inherit; color: inherit; }
 
 /* ---------- chat */
 .chat-scroll { flex: 1; overflow-y: auto; }
-.chat-inner { max-width: 760px; margin: 0 auto; padding: 18px 24px 40px; }
+.chat-inner { max-width: calc(var(--chat-measure) + 48px); margin: 0 auto; padding: 18px 24px 40px; }
 .msg { margin: 22px 0; animation: fade-in 0.15s ease; }
 .msg.user { display: flex; justify-content: flex-end; }
 .msg.user .msg-wrap { display: flex; flex-direction: column; align-items: flex-end; max-width: 88%; }
@@ -162,7 +164,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .msg-actions.always { opacity: 0.85; flex-wrap: wrap; }
 .msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
 .msg-actions .icon-btn { width: 28px; height: 28px; }
-.assistant-body { line-height: 1.7; font-size: 15.5px; font-family: var(--font-serif); }
+.assistant-body { line-height: 1.4667; font-size: 15px; font-family: var(--font-serif); }
 .assistant-body > :first-child { margin-top: 0; }
 .assistant-body p { margin: 0.65em 0; }
 .assistant-body li { margin: 0.25em 0; }
@@ -195,11 +197,11 @@ details.reasoning div { white-space: pre-wrap; border-left: 2px solid var(--bord
 
 /* ---------- composer */
 .composer-dock { padding: 0 24px 14px; }
-.composer-wrap { max-width: 760px; margin: 0 auto; }
+.composer-wrap { max-width: var(--chat-measure); margin: 0 auto; }
 .composer { background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 12px 12px 8px 14px; transition: border-color 0.12s, box-shadow 0.12s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong)); }
 .composer.drag { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.composer textarea { width: 100%; border: 0; outline: none; resize: none; background: transparent; font-size: 15.5px; min-height: 28px; max-height: 300px; padding: 2px 2px 8px; }
+.composer textarea { width: 100%; border: 0; outline: none; resize: none; background: transparent; font-size: 15px; min-height: 28px; max-height: 300px; padding: 2px 2px 8px; }
 .composer-row { display: flex; align-items: center; gap: 6px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 9px; padding: 3px 4px 3px 8px; font-size: 12px; background: var(--bg); }

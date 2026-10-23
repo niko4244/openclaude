@@ -190,7 +190,9 @@ export default function App() {
     // openclaude://new?prompt=… prefills a new chat; the user still presses Send.
     const u3 = listen<string>("deep-link-new", (e) => menuRef.current(`deep:${e.payload}`));
     const u4 = listen<string>("open-chat", (e) => menuRef.current(`open:${e.payload}`));
+    const u5 = listen("sync-changed", () => menuRef.current("sync-changed"));
     return () => {
+      void u5.then((f) => f());
       void u1.then((f) => f());
       void u2.then((f) => f());
       void u3.then((f) => f());
@@ -260,6 +262,7 @@ export default function App() {
   };
 
   menuRef.current = (id: string) => {
+    if (id === "sync-changed") return void refreshConvs();
     if (id.startsWith("open:")) {
       void refreshConvs();
       return openChat(id.slice(5));

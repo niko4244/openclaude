@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
 
@@ -132,6 +132,7 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
         <span className="help">Starts minimized to the tray so scheduled tasks can run.</span>
       </div>
       <SttField toast={toast} />
+      <SyncField toast={toast} />
       <ComputerUseField />
       <BrowserToolsField />
       <ChromeExtensionField />
@@ -787,5 +788,29 @@ function PluginsTab({ toast }: { toast: (m: string) => void }) {
         </div>
       ))}
     </>
+  );
+}
+
+function SyncField({ toast }: { toast: (m: string) => void }) {
+  const [st, setSt] = useState<SyncStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void api.syncStatus().then(setSt); }, []);
+  const run = async (f: () => Promise<SyncStatus>) => {
+    setBusy(true);
+    try { setSt(await f()); } catch (e) { toast(String(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="field">
+      <label>Sync across devices</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="mono" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{st?.folder ?? "Off"}</span>
+        <button className="btn" disabled={busy} onClick={() => void run(api.syncChooseFolder)}>{st?.folder ? "Change folder…" : "Choose folder…"}</button>
+        {st?.folder && <button className="btn" disabled={busy} onClick={() => void run(async () => { const s = await api.syncNow(); toast("Synced"); return s; })}>{busy ? "Syncing…" : "Sync now"}</button>}
+        {st?.folder && <button className="btn" disabled={busy} onClick={() => void run(api.syncOff)}>Turn off</button>}
+      </div>
+      <span className="help">Pick a folder your cloud drive already syncs (OneDrive, Dropbox, a network share). Chats, projects, knowledge files and a few preferences sync through it every minute; no account is involved. API keys, tool permissions and connectors stay on each device.</span>
+      {st?.folder && <span className="help">This device: {st.device_name}{st.devices.length ? ` · also syncing: ${st.devices.join(", ")}` : ""}{st.last_at ? ` · last synced ${new Date(st.last_at).toLocaleTimeString()}` : ""}</span>}
+      {st?.error && <div className="error-box" style={{ marginTop: 6 }}>{st.error}</div>}
+    </div>
   );
 }

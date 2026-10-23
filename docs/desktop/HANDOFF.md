@@ -55,7 +55,13 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **Computer use:** the screenshot path is verified live. The vision reply timed out (HTTP 408); a direct replay ran at 2.7 tok/s with the GPU at 15.6/16.3 GB, so it is a local-throughput limit, not an app defect. Re-run `e2e/computer-use.e2e.mjs` when the GPU is free.
 - **Artifacts:** React component artifacts run live in the sandbox (Babel in-frame, import map to esm.sh, Tailwind), Mermaid renders, and select-to-ask offers Improve / Explain. Commit `14cbfebf`.
 - **Last full gate (`14cbfebf`):** desktop E2E 38/38, a11y 0, isolation 4/4, artifact-previews 4/4, plugins 11/11, Rust 80 (+9 live tests ignored). The voice E2E check flaked once on a model reply ("spåken") and passed on re-run.
-- **Matrix:** every row is Operational except 21 (sync) and 25 (Office/BLE), which are not planned.
+- **Matrix:** every row is Operational except 25 (Office add-ins, simulators, BLE buddy), documented as not applicable.
+- **Tranche T11 (since `ca519be8`):**
+  - Computer use passes live 3/3 with a warm gemma4.
+  - Layout geometry is measured from the reference bundle's CSS tokens (`resources/ion-dist`) and adopted: 768 px column, 18 px composer radius, 8 px base radius, 15 px / 1.4667 chat text.
+  - Sync (`src-tauri/src/sync.rs`, Settings → General → Sync across devices; env `OPENCLAUDE_SYNC_DIR` for tests): e2e/sync.e2e.mjs 6/6.
+  - Gate: desktop 38/38, a11y 0, Rust 82.
+- **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
 ## Next steps (in order)
