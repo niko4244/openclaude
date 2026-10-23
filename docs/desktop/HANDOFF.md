@@ -42,16 +42,16 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Pushed:** everything, including `.mcpb` signature verification, Read aloud, and the empty-reply retry.
-- **Gate:**
-  - Rust 65/65.
-  - Real-desktop E2E 35/35, including live browser tools, Quick Entry recents and artifact Download.
-  - a11y 0 violations.
-  - Isolation 4/4.
-- **Matrix:** 16 operational, 7 partial, 2 not planned.
+- **Pushed:** everything up to folder tasks (Cowork-style, row 17).
+  - Tasks can target a granted folder.
+  - The coding agent runs headless in `default` mode with our own approval policy (`agent::allow_in_folder`): Write/Edit inside the folder are allowed, everything else that asks is denied.
+  - Read-only shell commands still run, because the CLI auto-allows them.
+  - Live-verified: the Write was allowed and `mkdir` was denied.
+- **Finding:** the CLI's `acceptEdits` mode auto-runs filesystem shell commands (`mkdir`, redirects), so don't use it where commands must be blocked.
+- **Gate running:** Rust, build, E2E (including the new folder-task check), a11y.
 
 ## Next steps (in order)
-1. Next: Cowork-style folder tasks (row 17). Tasks can target a granted folder and run the CLI agent there in the background (edits auto-accepted, commands auto-denied). Plus a hands-free voice mode (row 19).
+1. After the gate: update matrix row 17, then build a hands-free voice mode (row 19): continuous dictate, send, read-aloud loop.
 3. Remaining parity gaps:
    - An extension directory (needs a hosted index; none exists for MCPB yet).
    - Artifact in-panel editing.

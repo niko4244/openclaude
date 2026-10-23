@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Clock, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { api, type ModelEntry, type Task } from "../api";
@@ -24,6 +25,8 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
   const [err, setErr] = useState<string | null>(null);
 
   const load = async () => setTasks(await api.tasksList());
+  const [folders, setFolders] = useState<string[]>([]);
+  useEffect(() => { void invoke<string[]>("list_workspaces").then(setFolders); }, []);
   useEffect(() => {
     void load();
     const un = listen("tasks-changed", () => void load());
@@ -70,6 +73,13 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
                 {kind === "daily" && <input type="time" value={at} onChange={(e) => setAt(e.target.value)} />}
               </div>
             </div>
+            <div className="field"><label>Work in folder (optional)</label>
+              <select aria-label="Task folder" value={edit.workspace || ""} onChange={(e) => setEdit({ ...edit, workspace: e.target.value || null })}>
+                <option value="">No folder (chat task)</option>
+                {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+              <span className="help">With a folder, the OpenClaude coding agent works there: file edits inside the folder are allowed; shell commands that change things and anything else needing approval are denied (read-only commands still run). Folders come from Code → Open folder.</span>
+            </div>
             <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><input type="checkbox" checked={edit.enabled} onChange={(e) => setEdit({ ...edit, enabled: e.target.checked })} /> Enabled</label>
             {err && <div className="error-box">{err}</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -85,7 +95,7 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
               <button className="grow task-main" onClick={() => open(t)}>
                 <span className="list-title">{t.title}</span>
                 <span className="muted">
-                  {describe(t.schedule)}{!t.enabled && " · paused"}{t.next_run_at && t.enabled ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : ""}
+                  {describe(t.schedule)}{t.workspace ? ` · in ${t.workspace.split(/[\\/]/).pop()}` : ""}{!t.enabled && " · paused"}{t.next_run_at && t.enabled ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : ""}
                   {t.last_run_at ? ` · last run ${ago(t.last_run_at)}: ` : ""}
                   {t.last_status && <span style={{ color: t.last_status === "ok" ? "var(--ok)" : "var(--err)" }}>{t.last_status}</span>}
                 </span>

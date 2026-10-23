@@ -126,6 +126,8 @@ export type Task = {
   last_status: string | null;
   last_conversation_id: string | null;
   running: boolean;
+  /** Granted folder for Cowork-style runs (coding agent; in-folder edits allowed, other approvals denied). */
+  workspace?: string | null;
 };
 
 export type ExtensionPreview = {

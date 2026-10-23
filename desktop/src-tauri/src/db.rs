@@ -41,6 +41,8 @@ const MIGRATIONS: &[&str] = &[
         schedule TEXT NOT NULL DEFAULT 'manual', enabled INTEGER NOT NULL DEFAULT 1,
         next_run_at INTEGER, last_run_at INTEGER, last_status TEXT, last_conversation_id TEXT,
         created_at INTEGER NOT NULL);",
+    // v5: folder tasks (Cowork-style): run the coding agent in a granted folder
+    "ALTER TABLE tasks ADD COLUMN workspace TEXT;",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

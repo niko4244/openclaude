@@ -26,6 +26,9 @@ pub struct Task {
     pub last_status: Option<String>,
     pub last_conversation_id: Option<String>,
     pub running: bool,
+    /// Granted folder: when set, the coding agent works in it (edits allowed, commands denied).
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Next run strictly after `from_ms`, or None for manual/invalid schedules.
@@ -65,9 +68,10 @@ impl Db {
             last_status: r.get(8)?,
             last_conversation_id: r.get(9)?,
             running: false,
+            workspace: r.get(10)?,
         })
     }
-    const TASK_COLS: &'static str = "id,title,prompt,model,schedule,enabled,next_run_at,last_run_at,last_status,last_conversation_id";
+    const TASK_COLS: &'static str = "id,title,prompt,model,schedule,enabled,next_run_at,last_run_at,last_status,last_conversation_id,workspace";
 
     pub fn tasks(&self) -> anyhow::Result<Vec<Task>> {
         let mut st = self.conn.prepare(&format!("SELECT {} FROM tasks ORDER BY created_at DESC", Self::TASK_COLS))?;
@@ -83,10 +87,10 @@ impl Db {
         }
         t.next_run_at = if t.enabled { next_run(&t.schedule, now_ms()) } else { None };
         self.conn.execute(
-            "INSERT INTO tasks(id,title,prompt,model,schedule,enabled,next_run_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+            "INSERT INTO tasks(id,title,prompt,model,schedule,enabled,next_run_at,created_at,workspace) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(id) DO UPDATE SET title=excluded.title, prompt=excluded.prompt, model=excluded.model,
-             schedule=excluded.schedule, enabled=excluded.enabled, next_run_at=excluded.next_run_at",
-            params![t.id, t.title, t.prompt, t.model, t.schedule, t.enabled as i64, t.next_run_at, now_ms()],
+             schedule=excluded.schedule, enabled=excluded.enabled, next_run_at=excluded.next_run_at, workspace=excluded.workspace",
+            params![t.id, t.title, t.prompt, t.model, t.schedule, t.enabled as i64, t.next_run_at, now_ms(), t.workspace],
         )?;
         Ok(())
     }
@@ -126,6 +130,9 @@ pub async fn run_task(state: Arc<AppState>, app: AppHandle, task: Task) -> anyho
     };
     state.running_tasks.lock().unwrap().insert(task.id.clone());
     let _ = app.emit("tasks-changed", ());
+    if let Some(ws) = task.workspace.clone().filter(|w| !w.is_empty()) {
+        return run_folder_task(state, app, task, ws, conv.id).await;
+    }
     let outcome: Arc<std::sync::Mutex<(Option<String>, bool)>> = Default::default();
     let o2 = outcome.clone();
     let sink = Sink::background(move |e| {
@@ -159,6 +166,71 @@ pub async fn run_task(state: Arc<AppState>, app: AppHandle, task: Task) -> anyho
             .show();
     }
     Ok(conv.id)
+}
+
+/// Cowork-style run: the coding agent works inside the granted folder. File edits inside
+/// it are approved automatically; anything else that asks for approval is denied.
+async fn run_folder_task(state: Arc<AppState>, app: AppHandle, task: Task, ws: String, cid: String) -> anyhow::Result<String> {
+    use crate::db::Message;
+    let granted: Vec<String> = state.db.lock().unwrap().get_setting("workspaces").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let outcome = if !granted.contains(&ws) {
+        Err(anyhow::anyhow!("folder {ws} is no longer granted"))
+    } else {
+        let cli = crate::agent::locate_cli(state.db.lock().unwrap().get_setting("openclaude_cli_path"))
+            .ok_or_else(|| anyhow::anyhow!("OpenClaude CLI not found"));
+        match cli {
+            Err(e) => Err(e),
+            Ok(cli) => {
+                let gw = state.gateway.read().await.clone();
+                let args = crate::agent::StartArgs {
+                    cli: &cli,
+                    cwd: std::path::Path::new(&ws),
+                    model: &task.model,
+                    permission_mode: "default",
+                    gateway_base: &gw.base_url,
+                    api_key: gw.api_key.as_deref(),
+                };
+                let root = std::path::PathBuf::from(&ws);
+                crate::agent::run_headless(args, &task.prompt, std::time::Duration::from_secs(15 * 60), |t, i| crate::agent::allow_in_folder(&root, t, i)).await
+            }
+        }
+    };
+    let (status, body) = match &outcome {
+        Ok(o) => {
+            let mut b = o.result.clone();
+            if !o.actions.is_empty() {
+                b.push_str(&format!("\n\n**Actions**\n{}", o.actions.iter().map(|a| format!("- {a}")).collect::<Vec<_>>().join("\n")));
+            }
+            if !o.denied.is_empty() {
+                b.push_str(&format!("\n\n**Denied (need interactive approval)**\n{}", o.denied.iter().map(|a| format!("- {a}")).collect::<Vec<_>>().join("\n")));
+            }
+            (if o.is_error { "error: agent reported an error".to_string() } else { "ok".to_string() }, b)
+        }
+        Err(e) => (format!("error: {e}"), String::new()),
+    };
+    {
+        let db = state.db.lock().unwrap();
+        let mut u = Message { conversation_id: cid.clone(), role: "user".into(), content: serde_json::Value::String(format!("{}\n\n_Folder: {ws}_", task.prompt)), ..Default::default() };
+        db.insert_message(&mut u)?;
+        let mut m = Message {
+            conversation_id: cid.clone(),
+            role: "assistant".into(),
+            content: serde_json::Value::String(body),
+            model_requested: Some(task.model.clone()),
+            status: if status == "ok" { "complete".into() } else { "error".into() },
+            error: (status != "ok").then(|| status.clone()),
+            ..Default::default()
+        };
+        db.insert_message(&mut m)?;
+        db.finish_task(&task.id, &status, &cid)?;
+    }
+    state.running_tasks.lock().unwrap().remove(&task.id);
+    let _ = app.emit("tasks-changed", ());
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title(format!("Folder task {}: {}", if status == "ok" { "finished" } else { "needs attention" }, task.title)).body(if status == "ok" { "Open OpenClaude to see what changed." } else { status.as_str() }).show();
+    }
+    Ok(cid)
 }
 
 /// Checks for due tasks every 30 s for the lifetime of the app.

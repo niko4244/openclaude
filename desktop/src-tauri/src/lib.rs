@@ -409,6 +409,10 @@ fn task_save(state: State<'_, Arc<AppState>>, mut task: tasks::Task) -> Res<task
     if !tasks::valid_schedule(&task.schedule) {
         return Err("schedule must be manual, every 5+ minutes, or daily at HH:MM".into());
     }
+    task.workspace = task.workspace.filter(|w| !w.trim().is_empty());
+    if let Some(w) = &task.workspace {
+        check_workspace(&state, w)?;
+    }
     state.db.lock().unwrap().save_task(&mut task).map_err(e)?;
     Ok(task)
 }

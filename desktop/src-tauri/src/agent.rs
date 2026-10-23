@@ -267,6 +267,94 @@ impl CodeSessions {
     }
 }
 
+/// Result of a non-interactive agent run (background tasks).
+#[derive(Debug, Default)]
+pub struct HeadlessOutcome {
+    pub result: String,
+    pub is_error: bool,
+    /// Tools the agent used, in order (e.g. "Write hello.txt").
+    pub actions: Vec<String>,
+    /// Requests that needed interactive approval and were denied.
+    pub denied: Vec<String>,
+}
+
+fn describe_tool(name: &str, input: &Value) -> String {
+    let arg = ["file_path", "path", "command", "pattern", "url"]
+        .iter()
+        .find_map(|k| input.get(*k).and_then(Value::as_str))
+        .unwrap_or("");
+    let arg: String = arg.chars().take(120).collect();
+    if arg.is_empty() { name.to_string() } else { format!("{name} {arg}") }
+}
+
+/// Background approval policy: only edit tools writing inside `root` are allowed.
+/// (The CLI's acceptEdits mode would also auto-run mkdir/rm/redirects, so it is not used.)
+pub fn allow_in_folder(root: &Path, tool: &str, input: &Value) -> bool {
+    if !matches!(tool, "Write" | "Edit" | "MultiEdit" | "NotebookEdit") {
+        return false;
+    }
+    let Some(p) = ["file_path", "notebook_path"].iter().find_map(|k| input.get(*k).and_then(Value::as_str)) else { return false };
+    let p = Path::new(p);
+    let abs = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    // Normalize without requiring the file to exist: resolve the parent, reject `..` escapes.
+    if abs.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    let (Ok(root), Some(parent)) = (root.canonicalize(), abs.parent()) else { return false };
+    parent.canonicalize().map(|pp| pp.starts_with(&root)).unwrap_or(false)
+}
+
+/// Run one prompt to completion without a UI. Approval requests are decided by `allow`
+/// (nobody is there to answer); denied ones are recorded.
+pub async fn run_headless(a: StartArgs<'_>, prompt: &str, limit: std::time::Duration, allow: impl Fn(&str, &Value) -> bool) -> anyhow::Result<HeadlessOutcome> {
+    let mut child = build_command(&a).spawn().map_err(|e| anyhow::anyhow!("failed to start node: {e}"))?;
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let msg = json!({"type": "user", "message": {"role": "user", "content": prompt}});
+    stdin.write_all(format!("{msg}\n").as_bytes()).await?;
+    stdin.flush().await?;
+    let mut out = HeadlessOutcome::default();
+    let run = async {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(line) = lines.next_line().await? {
+            let Ok(rec) = serde_json::from_str::<Value>(&line) else { continue };
+            if let Some((request_id, tool, input)) = parse_approval(&rec) {
+                let ok = allow(&tool, &input);
+                if !ok {
+                    out.denied.push(describe_tool(&tool, &input));
+                }
+                let msg = (!ok).then(|| "Not available in a background task: only file edits inside the task folder are allowed.".to_string());
+                let reply = control_response_line(&request_id, ok, input, msg);
+                stdin.write_all(reply.as_bytes()).await?;
+                stdin.flush().await?;
+                continue;
+            }
+            match rec["type"].as_str() {
+                Some("assistant") => {
+                    for b in rec.pointer("/message/content").and_then(Value::as_array).into_iter().flatten() {
+                        if b["type"] == "tool_use" {
+                            out.actions.push(describe_tool(b["name"].as_str().unwrap_or("tool"), &b["input"]));
+                        }
+                    }
+                }
+                Some("result") => {
+                    out.result = rec["result"].as_str().unwrap_or_default().to_string();
+                    out.is_error = rec["is_error"].as_bool().unwrap_or(false);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    };
+    let timed_out = tokio::time::timeout(limit, run).await.is_err();
+    let _ = child.kill().await;
+    if timed_out {
+        anyhow::bail!("agent did not finish within {} min", limit.as_secs() / 60);
+    }
+    Ok(out)
+}
+
 #[derive(Serialize, Default)]
 pub struct GitStatus {
     pub is_repo: bool,
@@ -447,6 +535,47 @@ pub fn detect_dev_url(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real CLI in a temp repo: the edit is allowed, the shell command is denied (background rules).
+    #[tokio::test]
+    #[ignore = "runs the real OpenClaude CLI against the live gateway"]
+    async fn live_headless_allows_edits_and_denies_commands() {
+        let key = std::env::var("OPENCLAUDE_LITELLM_KEY").expect("OPENCLAUDE_LITELLM_KEY");
+        let cli = locate_cli(None).expect("OpenClaude CLI");
+        // Outside %LOCALAPPDATA% (the CLI treats AppData paths as protected).
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let dir = tempfile::tempdir_in(base).unwrap();
+        std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
+        let out = run_headless(
+            StartArgs { cli: &cli, cwd: dir.path(), model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key) },
+            "Use the Write tool to create notes.txt containing the word ready. Then run the shell command `mkdir made_by_shell`. Then stop.",
+            std::time::Duration::from_secs(300),
+            |t, i| allow_in_folder(dir.path(), t, i),
+        )
+        .await
+        .unwrap();
+        println!("{out:?}");
+        assert!(dir.path().join("notes.txt").is_file(), "edit inside the folder allowed: {out:?}");
+        assert!(!out.denied.is_empty(), "the mkdir request was denied: {out:?}");
+        // The model may fall back to writing a *file* of that name (an allowed in-folder edit),
+        // but the shell `mkdir` itself must never have run.
+        assert!(!dir.path().join("made_by_shell").is_dir(), "mutating command must not run: {out:?}");
+        assert!(out.denied.iter().any(|d| d.starts_with("Bash mkdir")), "mkdir was denied: {out:?}");
+    }
+
+    #[test]
+    fn folder_policy_allows_only_edit_tools_inside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let inside = dir.path().join("sub").join("a.txt").to_string_lossy().to_string();
+        assert!(allow_in_folder(dir.path(), "Write", &json!({"file_path": inside})));
+        assert!(allow_in_folder(dir.path(), "Edit", &json!({"file_path": "sub/a.txt"})));
+        assert!(!allow_in_folder(dir.path(), "Bash", &json!({"command": "mkdir x"})));
+        assert!(!allow_in_folder(dir.path(), "Write", &json!({"file_path": "../escape.txt"})));
+        let outside = std::env::temp_dir().join("oc-outside.txt").to_string_lossy().to_string();
+        assert!(!allow_in_folder(&dir.path().join("sub"), "Write", &json!({"file_path": outside})));
+        assert!(!allow_in_folder(dir.path(), "Write", &json!({})));
+    }
 
     #[test]
     fn command_routes_through_gateway_and_never_skips_permissions() {

@@ -363,6 +363,19 @@ try {
     record("task result opens as a chat", opened, JSON.stringify((await lastAssistantText(p2)).slice(0, 60)));
   }
 
+  // 15b. folder task (Cowork-style): coding agent writes inside the granted folder in the background
+  await p2.click('.nav-item:has-text("Tasks")');
+  await p2.click('button:has-text("New task")');
+  await p2.fill('.field:has(label:text-is("Title")) input', "E2E folder");
+  await p2.fill('.field:has(label:text-is("Prompt")) textarea', "Use the Write tool to create a file named task_output.txt containing the word done. Then stop.");
+  await p2.selectOption('.field:has(label:text-is("Model")) select', "coder-local");
+  await p2.selectOption('[aria-label="Task folder"]', repo);
+  await p2.click('button:has-text("Save task")');
+  await p2.click('.task-row:has-text("E2E folder") button:has-text("Run now")');
+  await p2.waitForSelector('.task-row:has-text("E2E folder") :text("ok")', { timeout: 600000 }).catch(() => {});
+  const { existsSync } = await import("node:fs");
+  record("folder task edits files in background", existsSync(join(repo, "task_output.txt")), (await p2.locator('.task-row:has-text("E2E folder")').innerText()).replace(/\s+/g, " ").slice(0, 120));
+
   // 17. deep link opened while running: forwarded by single-instance, prefilled, not sent
   const before2 = await p2.locator(".conv-item").count();
   spawn(exe, ["openclaude://new?prompt=Hello%20from%20a%20link"], { env: { ...process.env, OPENCLAUDE_DATA_DIR: dataDir }, stdio: "ignore" });
