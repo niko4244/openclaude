@@ -131,7 +131,9 @@ fn system_prompt(state: &AppState, conversation_id: &str, query: &str) -> String
          web page, an SVG image, a document, or a program longer than about 20 lines), put it in one fenced code \
          block whose info string is the language followed by a short title, for example ```html title=\"Pricing page\". \
          Use language `markdown` for documents. When revising such content, reuse the same title. \
-         Do not add a title to short snippets.",
+         Do not add a title to short snippets. For an interactive app or widget, write one React component with a default \
+         export in a ```jsx block (Tailwind classes work; you may import react, lucide-react, recharts, d3, lodash, papaparse \
+         and three). For a diagram, use a ```mermaid block.",
         chrono_date()
     )];
     if let Some(g) = db.get_setting("system_prompt").filter(|s| !s.trim().is_empty()) {

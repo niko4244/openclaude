@@ -468,6 +468,7 @@ export default function App() {
           versions={versionsOf(artifact.title)}
           onSelect={setArtifact}
           onClose={() => setArtifact(null)}
+          onAsk={(t) => void send(t, [])}
         />
       )}
       {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
