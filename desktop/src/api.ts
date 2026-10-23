@@ -223,6 +223,21 @@ export const api = {
   mcpImport: (path: string, names: string[]) => invoke<number>("mcp_import", { path, names }),
   registrySearch: (query: string | null, cursor: string | null) => invoke<RegistryPage>("registry_search", { query, cursor }),
 
+  pluginsList: () => invoke<PluginView[]>("plugins_list"),
+  pluginInspect: (spec: string) => invoke<PluginOffer>("plugin_inspect", { spec }),
+  pluginInstall: (spec: string, names: string[]) => invoke<string[]>("plugin_install", { spec, names }),
+  pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
+  pluginSet: (id: string, p: { enabled?: boolean; autoUpdate?: boolean; hooks?: boolean }) =>
+    invoke<void>("plugin_set", { id, enabled: p.enabled ?? null, autoUpdate: p.autoUpdate ?? null, hooks: p.hooks ?? null }),
+  pluginUpdate: (id: string) => invoke<boolean | null>("plugin_update", { id }),
+  pluginRollback: (id: string) => invoke<void>("plugin_rollback", { id }),
+  pluginsUpdateAll: () => invoke<string[]>("plugins_update_all"),
+  pluginsImportCandidates: () => invoke<PluginCandidate[]>("plugins_import_candidates"),
+  pluginsImport: (keys: string[]) => invoke<string[]>("plugins_import", { keys }),
+  pluginContextPreview: () => invoke<string>("plugin_context_preview"),
+  slashCommands: () => invoke<SlashCommand[]>("slash_commands"),
+  slashExpand: (name: string, args: string) => invoke<string>("slash_expand", { name, args }),
+
   tasksList: () => invoke<Task[]>("tasks_list"),
   taskSave: (task: Task) => invoke<Task>("task_save", { task }),
   taskDelete: (id: string) => invoke<void>("task_delete", { id }),
@@ -243,3 +258,33 @@ export function textOf(content: Message["content"]): string {
     .map((p) => p.text)
     .join("\n");
 }
+
+export type PluginSource =
+  | { kind: "git"; url: string; git_ref?: string; subdir?: string; marketplace?: string }
+  | { kind: "local"; path: string; origin: string };
+export type PluginView = {
+  id: string;
+  name: string;
+  description: string;
+  version: string | null;
+  source: PluginSource;
+  root: string;
+  repo_dir: string | null;
+  enabled: boolean;
+  auto_update: boolean;
+  hooks: boolean;
+  user_scope: boolean;
+  sha: string | null;
+  prev_sha: string | null;
+  updated_at: number;
+  checked_at: number;
+  error: string | null;
+  mcp_servers: string[];
+  skills: number;
+  commands: number;
+  agents: number;
+  hook_commands: number;
+};
+export type PluginOffer = { repo: string; marketplace: string | null; items: { name: string; description: string; source: PluginSource | null; note: string | null }[] };
+export type PluginCandidate = { key: string; name: string; origin: string; local: string; github: PluginSource | null; user_scope: boolean; imported: boolean };
+export type SlashCommand = { kind: "skill" | "command" | "agent"; name: string; plugin: string; description: string; arg_hint: string | null; path: string };

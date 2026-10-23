@@ -132,6 +132,8 @@ pub struct StartArgs<'a> {
     pub permission_mode: &'a str,
     pub gateway_base: &'a str,
     pub api_key: Option<&'a str>,
+    /// Enabled plugins, loaded by the CLI itself (all hook types run there).
+    pub plugin_dirs: &'a [PathBuf],
 }
 
 pub fn build_command(a: &StartArgs) -> Command {
@@ -142,6 +144,9 @@ pub fn build_command(a: &StartArgs) -> Command {
         .args(["--permission-mode", a.permission_mode]);
     if asks_for_approval(a.permission_mode) {
         c.args(["--permission-prompt-tool", "stdio"]);
+    }
+    for d in a.plugin_dirs {
+        c.arg("--plugin-dir").arg(d);
     }
     c.current_dir(a.cwd)
         .env("CLAUDE_CODE_USE_OPENAI", "1")
@@ -547,7 +552,7 @@ mod tests {
         let dir = tempfile::tempdir_in(base).unwrap();
         std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
         let out = run_headless(
-            StartArgs { cli: &cli, cwd: dir.path(), model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key) },
+            StartArgs { cli: &cli, cwd: dir.path(), model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key), plugin_dirs: &[] },
             "Use the Write tool to create notes.txt containing the word ready. Then run the shell command `mkdir made_by_shell`. Then stop.",
             std::time::Duration::from_secs(300),
             |t, i| allow_in_folder(dir.path(), t, i),
@@ -586,6 +591,7 @@ mod tests {
             permission_mode: "acceptEdits",
             gateway_base: "http://127.0.0.1:4000/",
             api_key: Some("k"),
+            plugin_dirs: &[PathBuf::from("p1"), PathBuf::from("p2")],
         };
         let c = build_command(&a);
         let std = c.as_std();
@@ -594,6 +600,7 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(!args.iter().any(|a| a.contains("dangerously")));
         assert!(args.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
+        assert_eq!(args.windows(2).filter(|w| w[0] == "--plugin-dir").map(|w| w[1].clone()).collect::<Vec<_>>(), ["p1", "p2"]);
         let env: HashMap<String, String> = std
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_string_lossy().into(), v?.to_string_lossy().into())))
@@ -602,7 +609,7 @@ mod tests {
     }
 
     fn args_for(mode: &str) -> Vec<String> {
-        let a = StartArgs { cli: Path::new("cli.mjs"), cwd: Path::new("."), model: "m", permission_mode: mode, gateway_base: "http://x", api_key: None };
+        let a = StartArgs { cli: Path::new("cli.mjs"), cwd: Path::new("."), model: "m", permission_mode: mode, gateway_base: "http://x", api_key: None, plugin_dirs: &[] };
         build_command(&a).as_std().get_args().map(|s| s.to_string_lossy().into()).collect()
     }
 
@@ -650,7 +657,7 @@ mod tests {
         });
         let cli = locate_cli(None).expect("openclaude cli.mjs");
         let sessions = CodeSessions::default();
-        let a = StartArgs { cli: &cli, cwd: &repo, model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key) };
+        let a = StartArgs { cli: &cli, cwd: &repo, model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key), plugin_dirs: &[] };
         sessions.start("s1".into(), a, ch).await.unwrap();
         sessions.send("s1", "Create a file named hello.txt containing exactly the word hi. Use the Write tool.").await.unwrap();
 

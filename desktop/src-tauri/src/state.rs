@@ -29,6 +29,7 @@ pub struct AppState {
     /// Bundles picked in the native dialog, keyed by an opaque token (the UI never sends paths).
     pub pending_ext: Mutex<HashMap<String, PathBuf>>,
     pub running_tasks: Mutex<std::collections::HashSet<String>>,
+    pub plugins: crate::plugins::Plugins,
 }
 
 /// OS credential store first, then environment. Never read from or written to logs.

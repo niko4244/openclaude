@@ -5,6 +5,7 @@ mod chrome_bridge;
 mod computer;
 mod mcp_oauth;
 mod pdf;
+mod plugins;
 mod voice;
 mod db;
 mod extensions;
@@ -737,12 +738,13 @@ async fn code_start(
     let setting = state.db.lock().unwrap().get_setting("openclaude_cli_path");
     let cli = agent::locate_cli(setting).ok_or("OpenClaude CLI not found. Set OPENCLAUDE_BIN or install @gitlawb/openclaude.")?;
     let gw = state.gateway.read().await.clone();
+    let plugin_dirs = state.plugins.cli_plugin_dirs();
     let id = db::new_id();
     state
         .code
         .start(
             id.clone(),
-            agent::StartArgs { cli: &cli, cwd: &dir, model: &model, permission_mode: &permission_mode, gateway_base: &gw.base_url, api_key: gw.api_key.as_deref() },
+            agent::StartArgs { cli: &cli, cwd: &dir, model: &model, permission_mode: &permission_mode, gateway_base: &gw.base_url, api_key: gw.api_key.as_deref(), plugin_dirs: &plugin_dirs },
             on_event,
         )
         .await
@@ -777,6 +779,233 @@ async fn git_status(state: State<'_, Arc<AppState>>, cwd: String) -> Res<agent::
 async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<String>) -> Res<String> {
     let dir = check_workspace(&state, &cwd)?;
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
+}
+
+// ---------- plugins (Claude format)
+
+#[derive(Serialize)]
+struct PluginView {
+    #[serde(flatten)]
+    plugin: plugins::Plugin,
+    skills: usize,
+    commands: usize,
+    agents: usize,
+    hook_commands: usize,
+}
+
+fn plugin_view(p: plugins::Plugin) -> PluginView {
+    let comps = plugins::components(&p);
+    let count = |k: &str| comps.iter().filter(|c| c.kind == k).count();
+    let hook_commands = if p.user_scope { 0 } else { ["SessionStart", "UserPromptSubmit"].iter().map(|ev| plugins::hooks_for(&p, ev, "").len()).sum() };
+    PluginView { skills: count("skill"), commands: count("command"), agents: count("agent"), hook_commands, plugin: p }
+}
+
+/// Adds a plugin's MCP servers as connectors (keeping the user's on/off choice), drops ones it
+/// no longer has, and never touches a connector of the user's that happens to share a name.
+async fn sync_plugin_mcp(state: &AppState, id: &str) -> Res<()> {
+    let Some(p) = state.plugins.registry().plugins.into_iter().find(|p| p.id == id) else { return Ok(()) };
+    let wanted = if p.enabled { plugins::mcp_servers(&p) } else { Default::default() };
+    let mut cfg = McpConfig::load(&state.mcp_config_path);
+    let mut owned = vec![];
+    let mut started = vec![];
+    let mut changed = false;
+    for old in &p.mcp_servers {
+        if !wanted.contains_key(old) && cfg.servers.remove(old).is_some() {
+            changed = true;
+        }
+    }
+    for (name, mut sc) in wanted {
+        if let Some(existing) = cfg.servers.get(&name) {
+            if !p.mcp_servers.contains(&name) {
+                continue;
+            }
+            sc.disabled = existing.disabled;
+            if *existing == sc {
+                owned.push(name);
+                continue;
+            }
+        }
+        if !sc.disabled {
+            started.push(name.clone());
+        }
+        cfg.servers.insert(name.clone(), sc);
+        owned.push(name);
+        changed = true;
+    }
+    if changed {
+        cfg.save(&state.mcp_config_path).map_err(e)?;
+        state.mcp.set_config(&cfg).await;
+        for n in &started {
+            state.mcp.start(n).await;
+        }
+    }
+    state.plugins.update_entry(id, |e| e.mcp_servers = owned).map_err(e)?;
+    Ok(())
+}
+
+async fn sync_all_plugin_mcp(state: &AppState) {
+    for p in state.plugins.registry().plugins {
+        if let Err(err) = sync_plugin_mcp(state, &p.id).await {
+            eprintln!("plugin connectors for {}: {err}", p.name);
+        }
+    }
+}
+
+#[tauri::command]
+fn plugins_list(state: State<'_, Arc<AppState>>) -> Vec<PluginView> {
+    let mut v: Vec<PluginView> = state.plugins.registry().plugins.into_iter().map(plugin_view).collect();
+    v.sort_by(|a, b| a.plugin.name.to_lowercase().cmp(&b.plugin.name.to_lowercase()));
+    v
+}
+
+#[tauri::command]
+async fn plugin_inspect(spec: String) -> Res<plugins::Offer> {
+    plugins::inspect(&spec).await.map_err(e)
+}
+
+#[tauri::command]
+async fn plugin_install(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, spec: String, names: Vec<String>) -> Res<Vec<String>> {
+    let offer = plugins::inspect(&spec).await.map_err(e)?;
+    let mut done = vec![];
+    for it in offer.items.into_iter().filter(|i| names.contains(&i.name)) {
+        let src = it.source.ok_or_else(|| format!("{}: {}", it.name, it.note.unwrap_or_default()))?;
+        let p = state.plugins.install(&it.name, src).await.map_err(e)?;
+        sync_plugin_mcp(&state, &p.id).await?;
+        done.push(p.name);
+    }
+    let _ = app.emit("plugins-changed", ());
+    Ok(done)
+}
+
+#[tauri::command]
+async fn plugin_remove(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.plugins.update_entry(&id, |p| p.enabled = false).map_err(e)?;
+    sync_plugin_mcp(&state, &id).await?;
+    state.plugins.remove(&id).map_err(e)?;
+    let _ = app.emit("plugins-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn plugin_set(state: State<'_, Arc<AppState>>, id: String, enabled: Option<bool>, auto_update: Option<bool>, hooks: Option<bool>) -> Res<()> {
+    state
+        .plugins
+        .update_entry(&id, |p| {
+            p.enabled = enabled.unwrap_or(p.enabled);
+            p.auto_update = auto_update.unwrap_or(p.auto_update) && p.repo_dir.is_some();
+            p.hooks = hooks.unwrap_or(p.hooks) && !p.user_scope;
+        })
+        .map_err(e)?;
+    sync_plugin_mcp(&state, &id).await
+}
+
+#[tauri::command]
+async fn plugin_update(state: State<'_, Arc<AppState>>, id: String) -> Res<Option<bool>> {
+    let r = state.plugins.update(&id, true).await.map_err(e)?;
+    sync_plugin_mcp(&state, &id).await?;
+    Ok(r)
+}
+
+#[tauri::command]
+async fn plugin_rollback(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.plugins.rollback(&id).await.map_err(e)?;
+    sync_plugin_mcp(&state, &id).await
+}
+
+#[tauri::command]
+async fn plugins_update_all(state: State<'_, Arc<AppState>>) -> Res<Vec<String>> {
+    let changed = state.plugins.update_all().await;
+    sync_all_plugin_mcp(&state).await;
+    Ok(changed)
+}
+
+#[tauri::command]
+async fn plugins_import_candidates(state: State<'_, Arc<AppState>>) -> Res<Vec<plugins::Candidate>> {
+    Ok(plugins::import_candidates(&state.plugins.registry()).await)
+}
+
+#[tauri::command]
+async fn plugins_import(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, keys: Vec<String>) -> Res<Vec<String>> {
+    let mut done = vec![];
+    for c in plugins::import_candidates(&state.plugins.registry()).await.into_iter().filter(|c| keys.contains(&c.key)) {
+        let p = plugins::import(&state.plugins, &c).await.map_err(e)?;
+        sync_plugin_mcp(&state, &p.id).await?;
+        done.push(p.name);
+    }
+    let _ = app.emit("plugins-changed", ());
+    Ok(done)
+}
+
+#[tauri::command]
+fn slash_commands(state: State<'_, Arc<AppState>>) -> Vec<plugins::Component> {
+    state.plugins.index().to_vec()
+}
+
+#[tauri::command]
+fn slash_expand(state: State<'_, Arc<AppState>>, name: String, args: String) -> Res<String> {
+    let c = state.plugins.find(&name).ok_or_else(|| format!("No command /{name}"))?;
+    plugins::render(&c, &args).map_err(e)
+}
+
+/// What enabled plugins' SessionStart hooks add to a new chat (shown in Settings).
+#[tauri::command]
+async fn plugin_context_preview(state: State<'_, Arc<AppState>>) -> Res<String> {
+    Ok(state.plugins.session_context(&format!("preview-{}", db::new_id()), true).await)
+}
+
+/// First run: install Ponytail and import the user's Claude plugins. Test profiles
+/// (OPENCLAUDE_DATA_DIR) skip this unless OPENCLAUDE_PLUGIN_SEED=1.
+async fn seed_plugins(state: &Arc<AppState>, app: &tauri::AppHandle) {
+    if state.plugins.registry_path().exists() {
+        return;
+    }
+    if std::env::var_os("OPENCLAUDE_DATA_DIR").is_some() && std::env::var("OPENCLAUDE_PLUGIN_SEED").as_deref() != Ok("1") {
+        return;
+    }
+    let mut names = vec![];
+    if let Ok(offer) = plugins::inspect(plugins::PONYTAIL).await {
+        for it in offer.items {
+            if let Some(src) = it.source {
+                match state.plugins.install(&it.name, src).await {
+                    Ok(p) => names.push(p.name),
+                    Err(err) => eprintln!("seed {}: {err}", it.name),
+                }
+            }
+        }
+    }
+    for c in plugins::import_candidates(&state.plugins.registry()).await.into_iter().filter(|c| !c.imported) {
+        match plugins::import(&state.plugins, &c).await {
+            Ok(p) => names.push(p.name),
+            Err(err) => eprintln!("import {}: {err}", c.name),
+        }
+    }
+    if !state.plugins.registry_path().exists() {
+        let _ = state.plugins.save(&plugins::Registry::default());
+    }
+    sync_all_plugin_mcp(state).await;
+    if !names.is_empty() {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title("Plugins ready").body(format!("Added {} plugins, including Ponytail and your Claude plugins. Manage them in Settings → Plugins.", names.len())).show();
+        let _ = app.emit("plugins-changed", ());
+    }
+}
+
+/// Keeps GitHub plugins current: checks shortly after start, then every 15 minutes.
+fn start_plugin_updater(state: Arc<AppState>, app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        seed_plugins(&state, &app).await;
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        loop {
+            let changed = state.plugins.update_all().await;
+            if !changed.is_empty() {
+                sync_all_plugin_mcp(&state).await;
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app.notification().builder().title("Plugins updated").body(changed.join(", ")).show();
+                let _ = app.emit("plugins-changed", ());
+            }
+            tokio::time::sleep(plugins::CHECK_EVERY).await;
+        }
+    });
 }
 
 // ---------- Chrome extension bridge
@@ -970,6 +1199,7 @@ pub fn run() {
                 zoom: std::sync::Mutex::new(1.0),
                 pending_ext: Default::default(),
                 running_tasks: Default::default(),
+                plugins: plugins::Plugins::new(data_dir.join("plugins")),
             });
             app.manage(state.clone());
             {
@@ -994,6 +1224,7 @@ pub fn run() {
                 }
             }
             tasks::start_scheduler(state.clone(), app.handle().clone());
+            start_plugin_updater(state.clone(), app.handle().clone());
             if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") {
                 start_chrome_bridge(&state);
             }
@@ -1085,6 +1316,19 @@ pub fn run() {
             voice_transcribe,
             chrome_bridge_info,
             chrome_bridge_enable,
+            plugins_list,
+            plugin_inspect,
+            plugin_install,
+            plugin_remove,
+            plugin_set,
+            plugin_update,
+            plugin_rollback,
+            plugins_update_all,
+            plugins_import_candidates,
+            plugins_import,
+            slash_commands,
+            slash_expand,
+            plugin_context_preview,
             quick_entry_submit,
             quick_entry_hide,
             menu_action,

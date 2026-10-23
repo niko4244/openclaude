@@ -202,6 +202,15 @@ pub async fn run(state: Arc<AppState>, run_id: String, run: Arc<Run>, args: Send
 /// Returns Ok(true) when cancelled.
 async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink) -> anyhow::Result<bool> {
     let cid = &args.conversation_id;
+    let fresh = state.db.lock().unwrap().messages(cid)?.is_empty();
+    let mut plugin_ctx = state.plugins.session_context(cid, fresh).await;
+    if let Some(content) = &args.content {
+        match state.plugins.prompt_context(cid, &text_of(content)).await {
+            Ok(c) if !c.is_empty() => plugin_ctx = format!("{plugin_ctx}\n\n{c}"),
+            Ok(_) => {}
+            Err(reason) => anyhow::bail!("Blocked by a plugin hook: {reason}"),
+        }
+    }
     {
         let db = state.db.lock().unwrap();
         let mut conv = db.get_conversation(cid)?.ok_or_else(|| anyhow::anyhow!("conversation not found"))?;
@@ -252,6 +261,9 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") && crate::chrome_bridge::connected().await.is_some() {
             tools.extend(crate::chrome_bridge::tool_defs());
         }
+        if !state.plugins.index().is_empty() {
+            tools.extend(crate::plugins::tool_defs());
+        }
         tools
     } else {
         vec![]
@@ -261,7 +273,17 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         let hist = state.db.lock().unwrap().messages(cid)?;
         hist.iter().rev().find(|m| m.role == "user").map(|m| text_of(&m.content)).unwrap_or_default()
     };
-    let system = system_prompt(state, cid, &query);
+    let mut system = system_prompt(state, cid, &query);
+    if tools.iter().any(|t| t["function"]["name"] == "skills__search") {
+        system.push_str(&format!(
+            "\n\nThe user has {} skills, commands and agents installed (Claude plugins). When a task might match one, call skills__search, then skills__load, and follow its instructions.",
+            state.plugins.index().len()
+        ));
+    }
+    if !plugin_ctx.trim().is_empty() {
+        system.push_str("\n\n");
+        system.push_str(plugin_ctx.trim());
+    }
     let gateway = state.gateway.read().await.clone();
 
     let mut retried_empty = false;
@@ -435,6 +457,14 @@ enum ToolOutcome {
 }
 
 async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCall, ch: &Sink) -> ToolOutcome {
+    // Skills are local, read-only instructions (like Claude Code's Skill tool): no approval.
+    if call.name.starts_with("skills__") {
+        let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+        return match crate::plugins::execute(&state.plugins, &call.name, &args) {
+            Ok(t) => ToolOutcome::Done(cap(t), false, None),
+            Err(e) => ToolOutcome::Done(e.to_string(), true, None),
+        };
+    }
     // Computer use and the user's own Chrome: built-in, never via MCP, never in background runs,
     // never permanently pre-approved (they act with the user's screen / logged-in sessions).
     let is_chrome = call.name.starts_with("chrome__");

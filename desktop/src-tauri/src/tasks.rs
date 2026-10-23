@@ -182,6 +182,7 @@ async fn run_folder_task(state: Arc<AppState>, app: AppHandle, task: Task, ws: S
             Err(e) => Err(e),
             Ok(cli) => {
                 let gw = state.gateway.read().await.clone();
+                let plugin_dirs = state.plugins.cli_plugin_dirs();
                 let args = crate::agent::StartArgs {
                     cli: &cli,
                     cwd: std::path::Path::new(&ws),
@@ -189,6 +190,7 @@ async fn run_folder_task(state: Arc<AppState>, app: AppHandle, task: Task, ws: S
                     permission_mode: "default",
                     gateway_base: &gw.base_url,
                     api_key: gw.api_key.as_deref(),
+                    plugin_dirs: &plugin_dirs,
                 };
                 let root = std::path::PathBuf::from(&ws);
                 crate::agent::run_headless(args, &task.prompt, std::time::Duration::from_secs(15 * 60), |t, i| crate::agent::allow_in_folder(&root, t, i)).await

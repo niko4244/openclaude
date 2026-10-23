@@ -1,18 +1,20 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
 
-type Tab = "general" | "gateway" | "models" | "connectors" | "extensions" | "projects" | "about";
+type Tab = "general" | "gateway" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "about";
 const TABS: [Tab, string][] = [
   ["general", "General"],
   ["gateway", "Gateway"],
   ["models", "Models"],
   ["connectors", "Connectors (MCP)"],
+  ["plugins", "Plugins"],
   ["extensions", "Extensions"],
   ["projects", "Projects"],
   ["about", "About"],
@@ -66,6 +68,7 @@ export function Settings({
         {tab === "gateway" && <Gateway onChanged={onGatewayChanged} toast={toast} />}
         {tab === "models" && <Models models={models} onRefresh={onModelsChanged} />}
         {tab === "connectors" && <Connectors toast={toast} />}
+        {tab === "plugins" && <PluginsTab toast={toast} />}
         {tab === "extensions" && <Extensions toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
         {tab === "about" && <About />}
@@ -624,5 +627,165 @@ function ChromeExtensionField() {
         </div>
       )}
     </div>
+  );
+}
+
+function ago(ms: number) {
+  if (!ms) return "never";
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
+function sourceLabel(p: PluginView) {
+  if (p.source.kind === "local") return p.user_scope ? p.source.origin : `${p.source.origin || "local"} (read in place)`;
+  const repo = p.source.url.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  return `GitHub ${repo}${p.source.subdir ? ` / ${p.source.subdir}` : ""}`;
+}
+
+function PluginsTab({ toast }: { toast: (m: string) => void }) {
+  const [list, setList] = useState<PluginView[] | null>(null);
+  const [spec, setSpec] = useState("");
+  const [offer, setOffer] = useState<PluginOffer | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [cands, setCands] = useState<PluginCandidate[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const load = () => void api.pluginsList().then(setList);
+  useEffect(() => {
+    load();
+    const un = listen("plugins-changed", load);
+    return () => void un.then((f) => f());
+  }, []);
+  const run = async (label: string, f: () => Promise<void>) => {
+    setBusy(label);
+    setErr(null);
+    try { await f(); } catch (e) { setErr(String(e)); } finally { setBusy(null); load(); }
+  };
+  const inspect = (s: string) => run("inspect", async () => {
+    const o = await api.pluginInspect(s);
+    const ok = o.items.filter((i) => i.source);
+    setSpec(s);
+    setOffer(o);
+    setPicked(ok.length === 1 ? [ok[0].name] : []);
+  });
+  const set = (id: string, p: { enabled?: boolean; autoUpdate?: boolean; hooks?: boolean }) => run(`set:${id}`, () => api.pluginSet(id, p));
+  const hasPonytail = list?.some((p) => p.name === "ponytail");
+  const toImport = cands?.filter((c) => !c.imported) ?? [];
+  return (
+    <>
+      <p className="muted">Plugins use the Claude Code format: skills, slash commands, agents, MCP connectors and session hooks. Type <span className="mono">/</span> in the message box to use a command or skill; models can also find skills on their own. Plugins from GitHub update automatically within 15 minutes of a new commit.</p>
+      <div className="field">
+        <label htmlFor="plugin-spec">Install from GitHub</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input id="plugin-spec" style={{ flex: 1 }} value={spec} onChange={(e) => setSpec(e.target.value)} placeholder="owner/repo or a git URL" onKeyDown={(e) => { if (e.key === "Enter" && spec.trim()) void inspect(spec.trim()); }} />
+          <button className="btn" disabled={!spec.trim() || !!busy} onClick={() => void inspect(spec.trim())}>{busy === "inspect" ? "Looking…" : "Find plugins"}</button>
+        </div>
+        <span className="help">A marketplace repository lists its plugins; a plugin repository installs directly.</span>
+      </div>
+      {list && !hasPonytail && !offer && (
+        <div className="card">
+          <div className="card-head"><span className="name">Ponytail</span><span className="badge">featured</span></div>
+          <div className="muted" style={{ margin: "6px 0" }}>Lazy senior dev mode: the smallest change that fully solves the task, and a reply you understand in one read. <span className="mono">DietrichGebert/ponytail</span></div>
+          <button className="btn primary" disabled={!!busy} onClick={() => void inspect("DietrichGebert/ponytail")}>Get Ponytail</button>
+        </div>
+      )}
+      {offer && (
+        <div className="card">
+          <div className="card-head"><span className="name">{offer.marketplace ?? offer.repo}</span><span className="badge">{offer.items.length} plugin{offer.items.length === 1 ? "" : "s"}</span></div>
+          <div style={{ maxHeight: 280, overflow: "auto", margin: "6px 0" }}>
+            {offer.items.map((it) => (
+              <label key={it.name} className="offer-row">
+                <input type="checkbox" disabled={!it.source} checked={picked.includes(it.name)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, it.name] : p.filter((n) => n !== it.name)))} />
+                <span><strong>{it.name}</strong>{it.description && <span className="muted"> · {it.description}</span>}{it.note && <span className="help"> ({it.note})</span>}</span>
+              </label>
+            ))}
+          </div>
+          <div className="muted" style={{ margin: "8px 0" }}>Plugins can run code on your computer (hooks and MCP servers) with your permissions. Install only plugins you trust.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn primary" disabled={!picked.length || !!busy} onClick={() => void run("install", async () => {
+              const n = await api.pluginInstall(spec, picked);
+              toast(`Installed ${n.join(", ")}`);
+              setOffer(null);
+            })}>{busy === "install" ? "Installing…" : `Install${picked.length > 1 ? ` ${picked.length}` : ""}`}</button>
+            <button className="btn" onClick={() => setOffer(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      <div className="field">
+        <label>Your Claude plugins</label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="btn" disabled={!!busy} onClick={() => void run("scan", async () => setCands(await api.pluginsImportCandidates()))}>{busy === "scan" ? "Looking…" : "Find Claude plugins"}</button>
+          {toImport.length > 0 && <button className="btn primary" disabled={!!busy} onClick={() => void run("import", async () => {
+            const n = await api.pluginsImport(toImport.map((c) => c.key));
+            toast(`Imported ${n.length} plugin${n.length === 1 ? "" : "s"}`);
+            setCands(await api.pluginsImportCandidates());
+          })}>{busy === "import" ? "Importing…" : `Import ${toImport.length}`}</button>}
+        </div>
+        <span className="help">Finds plugins installed in Claude Code and Claude Desktop, plus your own skill folders. Ones published on GitHub are installed from there so they stay current; the rest are read in place.</span>
+        {cands && (
+          <div className="card" style={{ margin: "6px 0 0" }}>
+            {cands.length === 0 ? <div className="muted">No Claude plugins found.</div> : cands.map((c) => (
+              <div key={c.key} className="offer-row">
+                <span style={{ flex: 1 }}><strong>{c.name}</strong> <span className="muted">· {c.origin} · {c.github?.kind === "git" ? `updates from ${c.github.url.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")}` : "read in place"}</span></span>
+                {c.imported && <span className="badge local">added</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "18px 0 6px" }}>
+        <h3 style={{ margin: 0, flex: 1 }}>Installed{list ? ` (${list.length})` : ""}</h3>
+        <button className="btn" disabled={!!busy} onClick={() => void run("preview", async () => setPreview(await api.pluginContextPreview()))}>{busy === "preview" ? "Running hooks…" : "Preview chat context"}</button>
+        <button className="btn" disabled={!!busy} onClick={() => void run("updates", async () => {
+          const n = await api.pluginsUpdateAll();
+          toast(n.length ? `Updated ${n.join(", ")}` : "All plugins are up to date");
+        })}>{busy === "updates" ? "Checking…" : "Check for updates"}</button>
+      </div>
+      {preview !== null && (
+        <div className="card">
+          <div className="card-head"><span className="name">Added to new chats by plugin hooks</span><button className="btn" onClick={() => setPreview(null)}>Close</button></div>
+          <pre className="mono context-preview">{preview || "Nothing: no enabled plugin has session hooks."}</pre>
+        </div>
+      )}
+      {list?.length === 0 && <div className="muted">No plugins yet.</div>}
+      {list?.map((p) => (
+        <div className="card" key={p.id} data-plugin={p.name}>
+          <div className="card-head">
+            <span className="name">{p.name}</span>
+            {p.version && <span className="badge">v{p.version}</span>}
+            <span className="badge">{sourceLabel(p)}</span>
+            {!p.enabled && <span className="badge">off</span>}
+          </div>
+          {p.description && <div className="muted" style={{ margin: "6px 0" }}>{p.description}</div>}
+          <div className="plugin-meta">
+            <span>{p.skills} skill{p.skills === 1 ? "" : "s"}</span>
+            <span>{p.commands} command{p.commands === 1 ? "" : "s"}</span>
+            <span>{p.agents} agent{p.agents === 1 ? "" : "s"}</span>
+            {p.hook_commands > 0 && <span>{p.hook_commands} session hook{p.hook_commands === 1 ? "" : "s"}</span>}
+            {p.mcp_servers.length > 0 && <span>connectors: {p.mcp_servers.join(", ")}</span>}
+            {p.repo_dir && <span>updated {ago(p.updated_at)} · checked {ago(p.checked_at)}{p.sha ? ` · ${p.sha.slice(0, 7)}` : ""}</span>}
+          </div>
+          {p.error && <div className="error-box" style={{ marginTop: 6 }}>{p.error}</div>}
+          <div className="plugin-switches">
+            <label><input type="checkbox" checked={p.enabled} onChange={(e) => void set(p.id, { enabled: e.target.checked })} /> Enabled</label>
+            {p.repo_dir && <label><input type="checkbox" checked={p.auto_update} onChange={(e) => void set(p.id, { autoUpdate: e.target.checked })} /> Update automatically</label>}
+            {p.hook_commands > 0 && <label><input type="checkbox" checked={p.hooks} onChange={(e) => void set(p.id, { hooks: e.target.checked })} /> Run session hooks</label>}
+          </div>
+          <div className="plugin-actions">
+            {p.repo_dir && <button className="btn" disabled={!!busy} onClick={() => void run(`update:${p.id}`, async () => {
+              const r = await api.pluginUpdate(p.id);
+              toast(r == null ? `${p.name} is up to date` : `Updated ${p.name}`);
+            })}>{busy === `update:${p.id}` ? "Updating…" : "Update now"}</button>}
+            {p.prev_sha && <button className="btn" disabled={!!busy} onClick={() => void run(`rb:${p.id}`, async () => { await api.pluginRollback(p.id); toast(`${p.name} rolled back and pinned`); })}>Roll back</button>}
+            <button className="btn" disabled={!!busy} onClick={() => void run(`rm:${p.id}`, async () => { await api.pluginRemove(p.id); toast(`Removed ${p.name}`); })}>Remove</button>
+          </div>
+        </div>
+      ))}
+    </>
   );
 }

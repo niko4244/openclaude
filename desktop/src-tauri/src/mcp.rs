@@ -343,6 +343,7 @@ fn push_log(log: &std::sync::Mutex<VecDeque<String>>, line: String) {
 }
 
 async fn connect(name: &str, cfg: &ServerConfig, log: Arc<std::sync::Mutex<VecDeque<String>>>) -> anyhow::Result<Conn> {
+    let cfg = &crate::plugins::expand_config(cfg);
     match cfg.transport() {
         "stdio" => {
             let cmd = cfg.command.as_deref().ok_or_else(|| anyhow::anyhow!("no command configured"))?;

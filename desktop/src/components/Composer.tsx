@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowUp, FileText, Plus, Square } from "lucide-react";
-import { api, type Attachment, type AttachmentResult, type ContentPart } from "../api";
+import { api, type Attachment, type AttachmentResult, type ContentPart, type SlashCommand } from "../api";
 import { VoiceButton } from "./VoiceButton";
 import { voiceMode } from "../voiceMode";
 
@@ -44,6 +44,26 @@ export function Composer({
   const [atts, setAtts] = useState<Attachment[]>([]);
   const [drag, setDrag] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const [cmds, setCmds] = useState<SlashCommand[] | null>(null);
+  const [hl, setHl] = useState(0);
+  const [menuOff, setMenuOff] = useState(false);
+  const slashQ = /^\/(\S*)$/.exec(text)?.[1];
+  useEffect(() => {
+    if (slashQ !== undefined && !cmds) void api.slashCommands().then(setCmds, () => setCmds([]));
+  }, [slashQ, cmds]);
+  useEffect(() => {
+    const un = listen("plugins-changed", () => setCmds(null));
+    return () => void un.then((f) => f());
+  }, []);
+  useEffect(() => setHl(0), [slashQ]);
+  const q = (slashQ ?? "").toLowerCase();
+  const matches = slashQ === undefined || menuOff || !cmds ? [] : cmds.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
+  const pick = (c: SlashCommand) => {
+    const t = `/${c.name} `;
+    setText(t);
+    onDraftChange?.(t);
+    ta.current?.focus();
+  };
 
   useEffect(() => setText(initialDraft), [focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -75,9 +95,23 @@ export function Composer({
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = () => {
+  const send = async () => {
     if (busy || (!text.trim() && !atts.length)) return;
-    onSend(text.trim(), atts);
+    // `/name args`: the command, skill or agent goes along as a document the model reads.
+    const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    const list = m ? cmds ?? (await api.slashCommands().catch(() => [])) : [];
+    const hit = m && list.find((c) => c.name === m[1] || c.name.endsWith(":" + m[1]));
+    let extra: Attachment[] = [];
+    if (m && hit) {
+      try {
+        const body = await api.slashExpand(hit.name, m[2] ?? "");
+        extra = [{ name: `/${hit.name}`, mime: "text/markdown", kind: "text", text: body, data_url: null, size: body.length }];
+      } catch (e) {
+        onError(String(e));
+        return;
+      }
+    }
+    onSend(text.trim(), [...atts, ...extra]);
     setText("");
     setAtts([]);
     onDraftChange?.("");
@@ -98,6 +132,25 @@ export function Composer({
           ))}
         </div>
       )}
+      {matches.length > 0 && (
+        <div className="picker-pop slash-pop" role="listbox" aria-label="Commands and skills">
+          <div className="picker-list">
+            {matches.map((c, i) => (
+              <button
+                key={c.name}
+                role="option"
+                aria-selected={i === hl}
+                className={`picker-item ${i === hl ? "hl" : ""}`}
+                onMouseDown={(e) => { e.preventDefault(); pick(c); }}
+                onMouseEnter={() => setHl(i)}
+              >
+                <span className="name"><span className="mono">/{c.name}</span><span className="badge">{c.kind}</span>{c.arg_hint && <span className="sub">{c.arg_hint}</span>}</span>
+                {c.description && <span className="sub">{c.description}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <textarea
         ref={ta}
         rows={1}
@@ -105,13 +158,32 @@ export function Composer({
         placeholder={placeholder}
         aria-label="Message"
         onChange={(e) => {
+          setMenuOff(false);
           setText(e.target.value);
           onDraftChange?.(e.target.value);
         }}
         onKeyDown={(e) => {
+          if (matches.length) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              setHl((h) => (h + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+              return;
+            }
+            if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+              e.preventDefault();
+              pick(matches[hl] ?? matches[0]);
+              return;
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              setMenuOff(true);
+              return;
+            }
+          }
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            send();
+            void send();
           }
         }}
         onPaste={(e) => {
@@ -146,7 +218,7 @@ export function Composer({
             <Square size={12} fill="currentColor" />
           </button>
         ) : (
-          <button className="send-btn" onClick={send} disabled={!text.trim() && !atts.length} title="Send (Enter)" aria-label="Send message">
+          <button className="send-btn" onClick={() => void send()} disabled={!text.trim() && !atts.length} title="Send (Enter)" aria-label="Send message">
             <ArrowUp size={17} strokeWidth={2.25} />
           </button>
         )}
