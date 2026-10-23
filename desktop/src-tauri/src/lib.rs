@@ -11,6 +11,7 @@ mod gateway;
 mod knowledge;
 mod mcp;
 mod probe;
+mod registry;
 mod shell;
 mod sigverify;
 mod state;
@@ -468,6 +469,12 @@ async fn extension_install(state: State<'_, Arc<AppState>>, token: String, value
     state.mcp.set_config(&cfg).await;
     state.mcp.start(&name).await;
     Ok(name)
+}
+
+/// Search the official MCP Registry (fixed host; results are data, nothing is installed here).
+#[tauri::command]
+async fn registry_search(query: Option<String>, cursor: Option<String>) -> Res<registry::Page> {
+    registry::search(query.as_deref(), cursor.as_deref()).await.map_err(e)
 }
 
 #[derive(Serialize)]
@@ -993,6 +1000,7 @@ pub fn run() {
             mcp_sign_out,
             mcp_import_candidates,
             mcp_import,
+            registry_search,
             extension_pick,
             tasks_list,
             task_save,

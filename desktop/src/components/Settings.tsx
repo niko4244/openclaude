@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 
 type Tab = "general" | "gateway" | "models" | "connectors" | "extensions" | "projects" | "about";
@@ -336,6 +336,7 @@ function Connectors({ toast }: { toast: (m: string) => void }) {
         </>
       )}
 
+      <Directory existing={existing} toast={toast} onAdded={refresh} />
       <h2 className="section-h">Add a connector</h2>
       <div className="field"><label>Name</label><input aria-label="Connector name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="filesystem" /></div>
       <div className="field"><label>Command (stdio)</label><input aria-label="Command" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} placeholder="npx" /></div>
@@ -516,5 +517,85 @@ function BrowserToolsField() {
       <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("browser_tools_enabled", String(e.target.checked)); }} /> Browser tools</label>
       <span className="help">Lets the model browse the web in a separate Edge/Chrome window with its own profile (your normal browser, cookies and logins are never used). Every action asks for approval unless you allow it; page content is treated as untrusted.</span>
     </div>
+  );
+}
+
+/** Connector directory: the official MCP Registry. Remote servers become HTTP connectors;
+ * npm/PyPI packages become local npx/uvx connectors (they run code on this computer). */
+function Directory({ existing, toast, onAdded }: { existing: Set<string>; toast: (m: string) => void; onAdded: () => void }) {
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<RegistryEntry[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [envFor, setEnvFor] = useState<{ entry: RegistryEntry; vals: Record<string, string> } | null>(null);
+  const load = async (more = false) => {
+    setBusy(true); setErr(null);
+    try {
+      const p = await api.registrySearch(q || null, more ? cursor : null);
+      setRows((r) => (more ? [...r, ...p.entries] : p.entries));
+      setCursor(p.next_cursor);
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  };
+  const short = (n: string) => n.split("/").pop()!.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40);
+  const add = async (e: RegistryEntry, env: Record<string, string> = {}) => {
+    const name = short(e.name);
+    const remote = e.remotes[0];
+    const pkg = e.packages[0];
+    const cfg = remote
+      ? { type: remote.kind === "sse" ? "sse" : "http", url: remote.url }
+      : pkg.registry === "npm"
+        ? { command: "npx", args: ["-y", pkg.version ? `${pkg.identifier}@${pkg.version}` : pkg.identifier], env }
+        : { command: "uvx", args: [pkg.version ? `${pkg.identifier}==${pkg.version}` : pkg.identifier], env };
+    try { await api.mcpSaveServer(name, cfg); toast(`Added ${name}`); setEnvFor(null); onAdded(); }
+    catch (x) { toast(String(x)); }
+  };
+  return (
+    <>
+      <h2 className="section-h">Browse the MCP Registry</h2>
+      <p className="muted">Public directory at registry.modelcontextprotocol.io. Listings are third-party: check the publisher before adding. Remote servers may ask you to sign in; package servers run locally via npx/uvx.</p>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="search" style={{ flex: 1, margin: 0 }} aria-label="Search the MCP Registry" placeholder="Search connectors (e.g. github, notion, postgres)…" value={q}
+          onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(); }} />
+        <button className="btn" disabled={busy} onClick={() => void load()}>{busy ? "Searching…" : "Search"}</button>
+      </div>
+      {err && <div className="error-box" style={{ marginTop: 8 }}>{err}</div>}
+      {rows.map((e) => {
+        const name = short(e.name);
+        const remote = e.remotes[0];
+        const pkg = e.packages[0];
+        return (
+          <div className="card" key={e.name + (e.version || "")}>
+            <div className="card-head">
+              <span className="name">{e.title || e.name}</span>
+              {e.version && <span className="badge">v{e.version}</span>}
+              <span className="badge">{remote ? `remote · ${new URL(remote.url).host}` : `${pkg.registry} · runs locally`}</span>
+              <span className="spacer" />
+              <button className="btn" disabled={existing.has(name)} onClick={() => {
+                if (pkg && !remote && pkg.required_env.length) setEnvFor({ entry: e, vals: Object.fromEntries(pkg.required_env.map((k) => [k, ""])) });
+                else if (!remote && !confirm(`${pkg.identifier} will be downloaded and run on this computer via ${pkg.registry === "npm" ? "npx" : "uvx"}. Continue?`)) return;
+                else void add(e);
+              }}>{existing.has(name) ? "Added" : "Add"}</button>
+            </div>
+            <div className="muted" style={{ marginTop: 4 }}>{e.description}</div>
+            <div className="muted mono" style={{ marginTop: 2 }}>{e.name}</div>
+            {envFor?.entry === e && (
+              <div style={{ marginTop: 8 }}>
+                {Object.keys(envFor.vals).map((k) => (
+                  <div className="field" key={k}><label>{k}</label>
+                    <input type="password" aria-label={k} autoComplete="off" value={envFor.vals[k]} onChange={(x) => setEnvFor({ ...envFor, vals: { ...envFor.vals, [k]: x.target.value } })} /></div>
+                ))}
+                <div className="muted">Runs {pkg.identifier} locally via {pkg.registry === "npm" ? "npx" : "uvx"}. Values are stored in OpenClaude’s connector config.</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <button className="btn primary" disabled={Object.values(envFor.vals).some((v) => !v.trim())} onClick={() => void add(e, envFor.vals)}>Add connector</button>
+                  <button className="btn" onClick={() => setEnvFor(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {cursor && rows.length > 0 && <button className="btn" disabled={busy} onClick={() => void load(true)}>Load more</button>}
+    </>
   );
 }

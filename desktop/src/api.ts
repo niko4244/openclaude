@@ -142,6 +142,16 @@ export type ExtensionPreview = {
   signature: string;
   manifest_version: string;
 };
+export type RegistryEntry = {
+  name: string;
+  title: string | null;
+  description: string;
+  version: string | null;
+  website: string | null;
+  remotes: { kind: string; url: string }[];
+  packages: { registry: string; identifier: string; version: string | null; required_env: string[] }[];
+};
+export type RegistryPage = { entries: RegistryEntry[]; next_cursor: string | null };
 export type ImportCandidate = { source: string; path: string; servers: Record<string, ServerConfig> };
 
 export type ProbeReport = {
@@ -211,6 +221,7 @@ export const api = {
   mcpSignOut: (name: string) => invoke<void>("mcp_sign_out", { name }),
   mcpImportCandidates: () => invoke<ImportCandidate[]>("mcp_import_candidates"),
   mcpImport: (path: string, names: string[]) => invoke<number>("mcp_import", { path, names }),
+  registrySearch: (query: string | null, cursor: string | null) => invoke<RegistryPage>("registry_search", { query, cursor }),
 
   tasksList: () => invoke<Task[]>("tasks_list"),
   taskSave: (task: Task) => invoke<Task>("task_save", { task }),

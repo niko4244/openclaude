@@ -163,6 +163,19 @@ try {
   const connected = await page.waitForSelector('.card:has(.name:text-is("e2e-echo")) .dot.ok', { timeout: 20000 }).then(() => true, () => false);
   record("MCP stdio connector connects", connected, connected ? "" : await page.locator('.card:has(.name:text-is("e2e-echo"))').innerText().catch(() => ""));
   await page.screenshot({ path: join(out, "03-connectors.png") });
+  // connector directory: search the official MCP Registry and add the first remote server
+  await page.fill('[aria-label="Search the MCP Registry"]', "github");
+  await page.keyboard.press("Enter");
+  const firstRemote = page.locator('.card:has(.badge:text-matches("^remote")) button:has-text("Add")').first();
+  const found = await firstRemote.waitFor({ timeout: 20000 }).then(() => true, () => false);
+  let dirOk = false, dirDetail = "no remote results";
+  if (found) {
+    const before = await page.locator('.card .card-head .dot').count();
+    await firstRemote.click();
+    dirOk = await page.waitForFunction((n) => document.querySelectorAll(".card .card-head .dot").length > n, before, { timeout: 30000 }).then(() => true, () => false);
+    dirDetail = (await page.locator(".card").filter({ has: page.locator(".dot") }).last().innerText()).replace(/\s+/g, " ").slice(0, 110);
+  }
+  record("connector directory adds a registry server", dirOk, dirDetail);
   await page.click('button:has-text("Done")');
 
   // 4. tool call with approval
@@ -406,14 +419,14 @@ try {
   await p2.click('button:has-text("Done")');
   await p2.keyboard.press("Control+n");
   await sendMessage(p2, `Use the browser tools: navigate to ${pageUrl} then read the page and tell me the magic marker.`);
-  for (let i = 0; i < 4; i++) {
-    const ap = await p2.waitForSelector(".approval", { timeout: 60000 }).catch(() => null);
-    if (!ap) break;
-    await p2.click('.approval button:has-text("Allow for this chat")');
-    await sleep(500);
+  // Approve every browser step for this chat while the run is busy (slow models can take minutes).
+  const until = Date.now() + 300000;
+  while (Date.now() < until) {
+    if (await p2.locator(".approval").count()) await p2.click('.approval button:has-text("Allow for this chat")').catch(() => {});
     if (!(await p2.locator('.send-btn[aria-label="Stop generating"]').count())) break;
+    await sleep(1000);
   }
-  await waitIdle(p2, 180000);
+  await waitIdle(p2, 30000);
   const br = await lastAssistantText(p2);
   record("browser tools read a live page", /ORCHID-58/.test(br), JSON.stringify(br.slice(0, 80)));
   pageSrv.close();
