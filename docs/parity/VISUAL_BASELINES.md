@@ -45,3 +45,17 @@ Each in light + dark, at 100% and 150% scale, window sizes 1200×800 and 720×56
 - Sidebar width, composer max width and message column width live in the remote web app's CSS and
   were not extracted statically. Measure them from user-provided screenshots.
 - Quick Entry exact size and corner radius are unknown.
+
+## OpenClaude baselines (2026-10-23)
+
+Captured by `desktop/e2e/*.e2e.mjs` into `desktop/e2e/out/` (gitignored, regenerated every run).
+
+| State | File | Matches the reference layout | Deliberate difference |
+|---|---|---|---|
+| Home | `01-home.png` | Collapsible left sidebar (New chat, Search, Chats, Projects, Tasks, Code; Starred and Recents; account footer); centered serif greeting with mark; rounded composer with +, tools and model menus and a send button; starter chips | Original mark and teal accent (no Anthropic brand assets or colors) |
+| Chat | `02-chat.png`, `05-tool-result.png` | User turns in a warm bubble with avatar; assistant text unboxed in serif; action bar (copy, feedback, retry with model); tool cards; centered title menu | Routing metadata (model / host / tokens) shown inline, because users pick their own backends |
+| Artifact | `06-artifact.png` | Right-hand panel with Preview/Code tabs, version selector, Copy, Download, close | No "publish" (needs hosting) |
+| Frameless shell | `11-project.png`, `12-tasks.png` | Own title bar with app menu and window controls | |
+| Dialogs | a11y run | Ctrl+K palette, Ctrl+/ sheet, modal with inert background | |
+
+**Measuring parity.** No reference screenshots exist in the repo. The only Claude Desktop window on the dev machine hosts the agent session, and Anthropic's public pages don't show the app UI. Pixel-exact sameness is also not a goal: the mission requires original branding. Visual parity is therefore tracked as layout and interaction parity against `BEHAVIOR_CONTRACTS.md`. To diff side by side, drop reference PNGs into `docs/parity/reference/` named like the files above.

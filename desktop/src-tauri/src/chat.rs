@@ -249,6 +249,9 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         if state.db.lock().unwrap().get_setting("browser_tools_enabled").as_deref() == Some("true") {
             tools.extend(crate::browser::tool_defs());
         }
+        if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") && crate::chrome_bridge::connected().await.is_some() {
+            tools.extend(crate::chrome_bridge::tool_defs());
+        }
         tools
     } else {
         vec![]
@@ -432,12 +435,17 @@ enum ToolOutcome {
 }
 
 async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCall, ch: &Sink) -> ToolOutcome {
-    // Computer use: built-in tools, never via MCP, never in background runs.
-    let is_computer = call.name.starts_with("computer__");
+    // Computer use and the user's own Chrome: built-in, never via MCP, never in background runs,
+    // never permanently pre-approved (they act with the user's screen / logged-in sessions).
+    let is_chrome = call.name.starts_with("chrome__");
+    let is_computer = call.name.starts_with("computer__") || is_chrome;
     if is_computer && !ch.interactive {
         return ToolOutcome::Done("Computer use requires an interactive chat.".into(), true, None);
     }
-    if is_computer && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
+    if is_chrome && state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() != Some("true") {
+        return ToolOutcome::Done("The Chrome extension is disabled in Settings.".into(), true, None);
+    }
+    if is_computer && !is_chrome && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
         return ToolOutcome::Done("Computer use is disabled in Settings.".into(), true, None);
     }
     // Browser tools drive a dedicated browser profile; background runs need "Always allow" like any tool.
@@ -445,7 +453,9 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
     if is_browser && state.db.lock().unwrap().get_setting("browser_tools_enabled").as_deref() != Some("true") {
         return ToolOutcome::Done("Browser tools are disabled in Settings.".into(), true, None);
     }
-    let (server, tool) = if is_computer {
+    let (server, tool) = if is_chrome {
+        ("your Chrome".to_string(), call.name.trim_start_matches("chrome__").to_string())
+    } else if is_computer {
         ("computer".to_string(), call.name.trim_start_matches("computer__").to_string())
     } else if is_browser {
         ("browser".to_string(), call.name.trim_start_matches("browser__").to_string())
@@ -502,6 +512,15 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
             r = crate::browser::execute(&call.name, &args, &profile) => match r {
                 Ok(o) => ToolOutcome::Done(cap(o.text), false, o.image_data_url),
                 Err(e) => ToolOutcome::Done(format!("Browser error: {e}"), true, None),
+            },
+            _ = run.cancel.notified() => ToolOutcome::Cancelled,
+        };
+    }
+    if is_chrome {
+        return tokio::select! {
+            r = crate::chrome_bridge::execute(&call.name, &args) => match r {
+                Ok(o) => ToolOutcome::Done(cap(o.text), false, o.image_data_url),
+                Err(e) => ToolOutcome::Done(format!("Chrome error: {e}"), true, None),
             },
             _ = run.cancel.notified() => ToolOutcome::Cancelled,
         };

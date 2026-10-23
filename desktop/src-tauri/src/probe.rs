@@ -28,15 +28,13 @@ impl ProbeReport {
     }
 }
 
-// 8x8 red PNG.
-const RED_PNG: &[u8] = &[
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x01, 0x03, 0x00, 0x00, 0x00, 0xfe, 0xc1, 0x2c,
-    0xc8, 0x00, 0x00, 0x00, 0x06, 0x50, 0x4c, 0x54, 0x45, 0xff, 0x00, 0x00, 0xff, 0xff, 0xff, 0x41,
-    0x1d, 0x34, 0x11, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0x60, 0xc0,
-    0x05, 0x00, 0x00, 0x18, 0x00, 0x01, 0xcd, 0x20, 0x66, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-    0x44, 0xae, 0x42, 0x60, 0x82,
-];
+/// 64x64 solid red RGB PNG (some backends reject palette/1-bit PNGs).
+fn red_png() -> Vec<u8> {
+    let img = xcap::image::RgbImage::from_pixel(64, 64, xcap::image::Rgb([220, 20, 20]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, xcap::image::ImageFormat::Png).expect("encode png");
+    out.into_inner()
+}
 
 async fn one(gw: &Gateway, model: &str, msgs: Vec<Value>, tools: Option<Vec<Value>>, extra: Option<Value>) -> (Result<crate::gateway::Completion, String>, u64) {
     let cancel = tokio::sync::Notify::new();
@@ -108,7 +106,7 @@ pub async fn probe(gw: &Gateway, model: &str) -> ProbeReport {
     // vision
     let (r, ms) = one(gw, model, vec![json!({"role":"user","content":[
         {"type":"text","text":"What single color fills this image? Answer with one word."},
-        {"type":"image_url","image_url":{"url": format!("data:image/png;base64,{}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, RED_PNG))}}
+        {"type":"image_url","image_url":{"url": format!("data:image/png;base64,{}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, red_png()))}}
     ]})], None, None).await;
     match r {
         Ok(c) => push("vision", c.content.to_lowercase().contains("red"), ms, c.content),
@@ -121,7 +119,7 @@ pub async fn probe(gw: &Gateway, model: &str) -> ProbeReport {
 mod tests {
     #[test]
     fn vision_fixture_is_a_png() {
-        assert_eq!(&super::RED_PNG[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(&super::red_png()[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
     }
 
     /// OPENCLAUDE_LITELLM_KEY=... OC_LIVE_MODELS=a,b cargo test live_probe -- --ignored --nocapture

@@ -1,6 +1,7 @@
 mod agent;
 mod browser;
 mod chat;
+mod chrome_bridge;
 mod computer;
 mod mcp_oauth;
 mod pdf;
@@ -778,6 +779,57 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- Chrome extension bridge
+
+static CHROME_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Token and listener are backend-owned; the UI can only read them to show the pairing details.
+fn start_chrome_bridge(state: &AppState) {
+    if CHROME_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let token = {
+        let db = state.db.lock().unwrap();
+        db.get_setting("chrome_bridge_token").unwrap_or_else(|| {
+            let t = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+            let _ = db.set_setting("chrome_bridge_token", &t);
+            t
+        })
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = chrome_bridge::serve(chrome_bridge::DEFAULT_PORT, token).await {
+            eprintln!("chrome bridge stopped: {err}");
+            CHROME_STARTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+#[derive(Serialize)]
+struct ChromeBridgeInfo {
+    enabled: bool,
+    port: u16,
+    token: Option<String>,
+    connected: Option<String>,
+}
+
+#[tauri::command]
+async fn chrome_bridge_info(state: State<'_, Arc<AppState>>) -> Res<ChromeBridgeInfo> {
+    let (enabled, token) = {
+        let db = state.db.lock().unwrap();
+        (db.get_setting("chrome_extension_enabled").as_deref() == Some("true"), db.get_setting("chrome_bridge_token"))
+    };
+    Ok(ChromeBridgeInfo { enabled, port: chrome_bridge::DEFAULT_PORT, token: enabled.then_some(token).flatten(), connected: chrome_bridge::connected().await })
+}
+
+#[tauri::command]
+async fn chrome_bridge_enable(state: State<'_, Arc<AppState>>, on: bool) -> Res<()> {
+    state.db.lock().unwrap().set_setting("chrome_extension_enabled", if on { "true" } else { "false" }).map_err(e)?;
+    if on {
+        start_chrome_bridge(&state);
+    }
+    Ok(())
+}
+
 // ---------- voice
 
 /// Dictation: gateway STT when `stt_model` is set, otherwise local faster-whisper.
@@ -942,6 +994,9 @@ pub fn run() {
                 }
             }
             tasks::start_scheduler(state.clone(), app.handle().clone());
+            if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") {
+                start_chrome_bridge(&state);
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 state.mcp.set_config(&McpConfig::load(&mcp_config_path)).await;
@@ -1028,6 +1083,8 @@ pub fn run() {
             get_probes,
             quick_entry_toggle,
             voice_transcribe,
+            chrome_bridge_info,
+            chrome_bridge_enable,
             quick_entry_submit,
             quick_entry_hide,
             menu_action,

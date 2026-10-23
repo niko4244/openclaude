@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaude Desktop connector",
+  "version": "0.1.0",
+  "description": "Lets OpenClaude Desktop read and act in your Chrome tabs. Every action is approved in the app.",
+  "permissions": ["tabs", "scripting", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "OpenClaude", "default_popup": "popup.html" }
+}

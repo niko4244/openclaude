@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
+import { copyText } from "./Markdown";
 
 type Tab = "general" | "gateway" | "models" | "connectors" | "extensions" | "projects" | "about";
 const TABS: [Tab, string][] = [
@@ -129,6 +131,7 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
       <SttField toast={toast} />
       <ComputerUseField />
       <BrowserToolsField />
+      <ChromeExtensionField />
       <div className="field">
         <label htmlFor="hk">Quick entry shortcut</label>
         <input id="hk" value={hotkey} onChange={(e) => setHotkey(e.target.value)} placeholder="CommandOrControl+Alt+Space" />
@@ -597,5 +600,29 @@ function Directory({ existing, toast, onAdded }: { existing: Set<string>; toast:
       })}
       {cursor && rows.length > 0 && <button className="btn" disabled={busy} onClick={() => void load(true)}>Load more</button>}
     </>
+  );
+}
+
+function ChromeExtensionField() {
+  const [info, setInfo] = useState<{ enabled: boolean; port: number; token: string | null; connected: string | null } | null>(null);
+  const [show, setShow] = useState(false);
+  const load = () => void invoke<{ enabled: boolean; port: number; token: string | null; connected: string | null }>("chrome_bridge_info").then(setInfo);
+  useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); }, []);
+  if (!info) return null;
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={info.enabled} onChange={async (e) => { const on = e.target.checked; setInfo({ ...info, enabled: on }); await invoke("chrome_bridge_enable", { on }); load(); }} /> Chrome extension (your own browser)</label>
+      <span className="help">Lets the model read and act in your real Chrome tabs, including logged-in sites. Every action asks for approval (at most “for this chat”); it never runs in background tasks. Load <span className="mono">desktop/chrome-extension</span> in chrome://extensions (Developer mode → Load unpacked), then paste the port and token into the extension popup.</span>
+      {info.enabled && (
+        <div className="card" style={{ margin: "6px 0 0" }}>
+          <div className="muted">Status: {info.connected ? `connected (${info.connected})` : "waiting for the extension"}</div>
+          <div className="mono" style={{ marginTop: 4 }}>Port: {info.port}</div>
+          <div className="mono" style={{ display: "flex", gap: 8, alignItems: "center" }}>Token: {show ? info.token : "••••••••"}
+            <button className="btn" onClick={() => setShow((s) => !s)}>{show ? "Hide" : "Show"}</button>
+            {info.token && <button className="btn" onClick={() => copyText(info.token!)}>Copy</button>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
