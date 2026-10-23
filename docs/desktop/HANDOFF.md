@@ -42,12 +42,20 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Pushed:** folder tasks, voice conversation mode, live remote-MCP tests (Streamable HTTP against DeepWiki; OAuth discovery against Linear and Notion).
-- **Gate:**
-  - E2E 36/37. The only miss is the artifact check, which depends on model compliance; the prompt is now explicit.
-  - a11y 0 violations.
-  - Rust 66, plus live: headless folder policy, browser, CLI approvals, DeepWiki, OAuth discovery.
-- **Matrix:** 19 operational, 4 partial, 2 not planned.
+- **Pushed:** `d24f6e42`.
+  - Connector directory (official MCP Registry), voice conversation mode, folder tasks.
+  - Answers emitted in the reasoning channel are now shown as the reply.
+- **Last full gate:**
+  - E2E 37/38. The browser check showed an empty reply, caused by the reasoning-channel bug that `d24f6e42` fixes.
+  - a11y 0.
+  - Rust 68.
+- **Running:** confirming gate on `d24f6e42`.
+- **Matrix:** 20 operational, 3 partial (18 computer-use live, 20 release, 24 Chrome extension), 2 not planned (21 sync, 25 Office/BLE).
+- **Waiting on Nik:**
+  - Publish a release?
+  - A vision model on the gateway?
+  - Reference screenshots for visual diffing?
+  - Build a Chrome extension or sync?
 
 ## Next steps (in order)
 1. Remaining partials:
