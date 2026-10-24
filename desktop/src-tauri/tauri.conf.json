@@ -48,9 +48,10 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       },
-      "nsis": {
-        "installMode": "currentUser"
-      }
+  "nsis": {
+    "installMode": "currentUser",
+    "installerHooks": "installer/nsis-hooks.nsh"
+  }
     },
     "createUpdaterArtifacts": false
   },
