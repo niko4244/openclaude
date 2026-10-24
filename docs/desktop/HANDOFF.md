@@ -80,7 +80,7 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Settings is now a modal over the page you came from (`underPage`/`view` in App.tsx), with a grouped icon nav, filter, close × (`aria-label="Close settings"`, the E2E selector), switches and a segmented theme control.
   - Pages are full width.
   - Gate: desktop 38/38, a11y 0, plugins 11/11.
-- **Neutral palette:** surfaces now sit at the reference lightness in both themes, within 3 levels per channel (VISUAL_BASELINES §1c). The accent, logo and fonts stay ours. a11y 0 in both themes.
+- **Neutral palette:** sidebar, main and divider are pixel-identical to the reference in light and dark (VISUAL_BASELINES §1c). The accent, logo and fonts stay ours by mission rule. a11y 0 in both themes.
 - **iPhone (Nik asked to test devices with his iPhone, 2026-10-24):**
   - The phone is paired over Bluetooth only; there's no USB VID_05AC device. Apple Mobile Device Service is installed but stopped.
   - Nik needs to connect a data cable, unlock the phone, tap "Trust", and start the service (opening iTunes/iMazing does that).

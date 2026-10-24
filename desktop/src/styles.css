@@ -1,13 +1,13 @@
 /* OpenClaude design tokens: neutral surfaces at the reference app's lightness (VISUAL_BASELINES §1c), with our own faint warm
    tint, teal brand accent and type. */
 :root {
-  --bg: #fcfcfa;
+  --bg: #fcfcfb;
   --bg-elev: #ffffff;
-  --bg-sidebar: #f9f9f6;
+  --bg-sidebar: #fbfbf9;
   --bg-hover: rgba(40, 30, 10, 0.05);
   --bg-active: rgba(40, 30, 10, 0.085);
   --bubble: #f0efea;
-  --border: #e4e3de;
+  --border: #e2e2e1;
   --border-strong: #d4d2cb;
   --text: #29261f;
   --text-dim: #6d6a62;
@@ -34,16 +34,16 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #161615; --bg-elev: #1f1f1d; --bg-sidebar: #121211; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
-    --bubble: #2a2a27; --border: #2b2b29; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
+    --bg: #151515; --bg-elev: #1f1f1d; --bg-sidebar: #111111; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
+    --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
     --accent: #4db39c; --accent-hover: #5fc4ad; --accent-ink: #0d1f1b; --accent-soft: rgba(77, 179, 156, 0.15); --code-bg: #0e0e0f;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.3);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #161615; --bg-elev: #1f1f1d; --bg-sidebar: #121211; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
-  --bubble: #2a2a27; --border: #2b2b29; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
+  --bg: #151515; --bg-elev: #1f1f1d; --bg-sidebar: #111111; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
+  --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
   --accent: #4db39c; --accent-hover: #5fc4ad; --accent-ink: #0d1f1b; --accent-soft: rgba(77, 179, 156, 0.15); --code-bg: #0e0e0f;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.3);
   color-scheme: dark;
