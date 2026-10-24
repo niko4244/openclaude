@@ -4,7 +4,8 @@
   "description": "Main window: core IPC + the few plugins the UI uses directly",
   "windows": [
     "main",
-    "quick"
+    "quick",
+    "recorder"
   ],
   "permissions": [
     "core:default",

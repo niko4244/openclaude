@@ -8,6 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
 pub const QUICK: &str = "quick";
+pub const RECORDER: &str = "recorder";
 
 fn item(app: &AppHandle, id: &str, label: &str, hint: Option<&str>) -> tauri::Result<MenuItem<Wry>> {
     let text = match hint {
@@ -50,6 +51,40 @@ pub fn toggle_quick(app: &AppHandle) -> tauri::Result<()> {
         .build()?;
     w.set_focus()?;
     Ok(())
+}
+
+/// The recording indicator: small, always on top at the top centre of the primary monitor,
+/// and excluded from screen capture so it never shows up in its own frames.
+pub fn open_recorder(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window(RECORDER) {
+        return w.show();
+    }
+    let (w, h) = (660.0, 56.0);
+    let mut b = WebviewWindowBuilder::new(app, RECORDER, WebviewUrl::App("index.html".into()))
+        .title("OpenClaude is recording")
+        .inner_size(w, h)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .content_protected(true)
+        .focused(false);
+    match app.primary_monitor()? {
+        Some(m) => {
+            let sf = m.scale_factor();
+            let (pos, size) = (m.position().to_logical::<f64>(sf), m.size().to_logical::<f64>(sf));
+            b = b.position(pos.x + (size.width - w) / 2.0, pos.y + 14.0);
+        }
+        None => b = b.center(),
+    }
+    b.build()?;
+    Ok(())
+}
+
+pub fn close_recorder(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(RECORDER) {
+        let _ = w.destroy();
+    }
 }
 
 pub fn on_menu(app: &AppHandle, event: &MenuEvent) {

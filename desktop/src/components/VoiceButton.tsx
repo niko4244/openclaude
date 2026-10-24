@@ -4,7 +4,7 @@ import { Loader2, Mic, Square } from "lucide-react";
 
 const MAX_MS = 2 * 60 * 1000;
 
-function toBase64(blob: Blob): Promise<string> {
+export function toBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result).split(",")[1] ?? "");

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Brain, Plug, SlidersHorizontal } from "lucide-react";
+import { AudioLines, Brain, Plug, SlidersHorizontal, Video } from "lucide-react";
 import { voiceMode } from "../voiceMode";
 import { api, type ServerStatus } from "../api";
 
-/** Composer tools popover: per-connector on/off and extended thinking. Both are persisted preferences. */
-export function ToolsMenu({ onManage }: { onManage: () => void }) {
+/** Composer tools popover: per-connector on/off and extended thinking (persisted preferences), and Record a skill. */
+export function ToolsMenu({ onManage, onError }: { onManage: () => void; onError: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
   const [servers, setServers] = useState<ServerStatus[]>([]);
   const [disabled, setDisabled] = useState<string[]>([]);
@@ -51,6 +51,10 @@ export function ToolsMenu({ onManage }: { onManage: () => void }) {
             <span className="grow">Voice conversation<span className="sub">Dictation is sent immediately and replies are read aloud.</span></span>
             <input type="checkbox" role="switch" checked={voice} onChange={(e) => { setVoice(e.target.checked); voiceMode.set(e.target.checked); }} />
           </label>
+          <button className="tool-row" onClick={() => { setOpen(false); api.recordStart().catch((e) => onError(String(e))); }}>
+            <Video size={16} />
+            <span className="grow">Record a skill<span className="sub">Record your screen while you narrate a task. OpenClaude turns it into a reusable skill.</span></span>
+          </button>
           <div className="picker-group">Connectors</div>
           {servers.map((s) => (
             <label className="tool-row" key={s.name}>

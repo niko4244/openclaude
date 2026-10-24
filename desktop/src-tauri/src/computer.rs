@@ -8,7 +8,7 @@ use base64::Engine as _;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::{json, Value};
 use std::sync::Mutex;
-use xcap::image::{imageops, DynamicImage, ImageFormat};
+use xcap::image::{imageops, DynamicImage, ImageFormat, RgbaImage};
 
 const MAX_SIDE: u32 = 1366;
 const MAX_TEXT: usize = 2000;
@@ -152,13 +152,13 @@ fn to_screen(v: u32, shot: u32, disp: u32) -> i32 {
     p.min(disp as u64 - 1) as i32
 }
 
-/// Longest side clamped to MAX_SIDE, aspect kept.
-fn scaled_dims(w: u32, h: u32) -> (u32, u32) {
+/// Longest side clamped to `max`, aspect kept.
+fn scaled_dims(w: u32, h: u32, max: u32) -> (u32, u32) {
     let long = w.max(h);
-    if long <= MAX_SIDE {
+    if long <= max {
         return (w, h);
     }
-    let f = |v: u32| ((v as u64 * MAX_SIDE as u64 + long as u64 / 2) / long as u64).max(1) as u32;
+    let f = |v: u32| ((v as u64 * max as u64 + long as u64 / 2) / long as u64).max(1) as u32;
     (f(w), f(h))
 }
 
@@ -235,19 +235,36 @@ fn validate(name: &str, args: &Value, last: Option<Shot>) -> Result<Action> {
     })
 }
 
-fn capture() -> Result<Output> {
+/// The primary monitor with its longest side at most `max_side`, plus its physical size.
+pub(crate) fn grab(max_side: u32) -> Result<(RgbaImage, u32, u32)> {
     let mon = xcap::Monitor::all()?
         .into_iter()
         .find(|m| m.is_primary().unwrap_or(false))
         .context("no primary monitor")?;
     let img = mon.capture_image()?;
     let (pw, ph) = img.dimensions();
-    let (w, h) = scaled_dims(pw, ph);
-    let img = if (w, h) == (pw, ph) { img } else { imageops::resize(&img, w, h, imageops::FilterType::Triangle) };
+    Ok((fit(img, max_side), pw, ph))
+}
+
+/// Downscale so the longest side is at most `max_side`.
+pub(crate) fn fit(img: RgbaImage, max_side: u32) -> RgbaImage {
+    let (pw, ph) = img.dimensions();
+    let (w, h) = scaled_dims(pw, ph, max_side);
+    if (w, h) == (pw, ph) { img } else { imageops::resize(&img, w, h, imageops::FilterType::Triangle) }
+}
+
+pub(crate) fn png(img: RgbaImage) -> Result<Vec<u8>> {
     let mut png = Vec::new();
     DynamicImage::ImageRgba8(img)
         .to_rgb8()
         .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)?;
+    Ok(png)
+}
+
+fn capture() -> Result<Output> {
+    let (img, pw, ph) = grab(MAX_SIDE)?;
+    let (w, h) = img.dimensions();
+    let png = png(img)?;
     *LAST.lock().unwrap() = Some(Shot { w, h });
     Ok(Output {
         text: format!("screenshot {w}x{h} (scaled from {pw}x{ph})"),
@@ -392,9 +409,9 @@ mod tests {
         }
         // backend smaller than screenshot (DPI-virtualised): still in bounds.
         assert!((0..1366).all(|v| (to_screen(v, 1366, 1280) as u32) < 1280));
-        assert_eq!(scaled_dims(2560, 1440), (1366, 768));
-        assert_eq!(scaled_dims(1440, 2560), (768, 1366));
-        assert_eq!(scaled_dims(1280, 720), (1280, 720));
+        assert_eq!(scaled_dims(2560, 1440, MAX_SIDE), (1366, 768));
+        assert_eq!(scaled_dims(1440, 2560, MAX_SIDE), (768, 1366));
+        assert_eq!(scaled_dims(1280, 720, MAX_SIDE), (1280, 720));
     }
 
     #[test]

@@ -174,6 +174,11 @@ impl Plugins {
         idx
     }
 
+    /// Drop the cached index after a component file was written.
+    pub fn reindex(&self) {
+        *self.index.lock().unwrap() = None;
+    }
+
     pub fn find(&self, name: &str) -> Option<Component> {
         let idx = self.index();
         let name = name.trim().trim_start_matches('/');
