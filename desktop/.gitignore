@@ -24,3 +24,12 @@ dist-ssr
 *.sw?
 e2e/out/
 !desktop/package-lock.json
+
+# never commit keys, certificates or local app data
+*.key
+*.pem
+*.pfx
+*.p12
+*.db
+*.sqlite
+mcp.json
