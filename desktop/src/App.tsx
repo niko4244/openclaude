@@ -5,7 +5,7 @@ import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { BookOpen, ChevronDown, Code2, Coffee, Download, Lightbulb, PenLine, Pin, PinOff, Pencil, Trash2 } from "lucide-react";
-import { api, textOf, type Attachment, type Conversation, type GatewayStatus, type Message, type ModelEntry, type Project } from "./api";
+import { api, textOf, type Attachment, type Conversation, type GatewayStatus, type Message, type ModelEntry, type Project, type RecordStatus } from "./api";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { Composer, buildContent } from "./components/Composer";
@@ -16,6 +16,7 @@ import { CodeView } from "./components/CodeView";
 import { FindBar, ShortcutsSheet } from "./components/FindBar";
 import { ChatsPage, ProjectKnowledge, ProjectsPage, SearchPalette, ago } from "./components/Pages";
 import { ToolsMenu } from "./components/ToolsMenu";
+import { RecordSkillDialog } from "./components/RecordSkillDialog";
 import { TasksPage } from "./components/TasksPage";
 import { WindowControls } from "./components/TitleBar";
 import { Logo } from "./components/Logo";
@@ -70,6 +71,8 @@ export default function App() {
   const [userName, setUserName] = useState("there");
   const [seed, setSeed] = useState<{ key: string; text: string }>({ key: "home", text: "" });
   const [measured, setMeasured] = useState<Record<string, Record<string, boolean>>>({});
+  // A finished screen recording waiting to become a skill.
+  const [recorded, setRecorded] = useState<{ key: number; status: RecordStatus } | null>(null);
   const draftTimer = useRef<number | undefined>(undefined);
 
   const toast = useCallback((m: string) => {
@@ -221,7 +224,11 @@ export default function App() {
     const u3 = listen<string>("deep-link-new", (e) => menuRef.current(`deep:${e.payload}`));
     const u4 = listen<string>("open-chat", (e) => menuRef.current(`open:${e.payload}`));
     const u5 = listen("sync-changed", () => menuRef.current("sync-changed"));
+    const u6 = listen<RecordStatus>("record-finished", (e) => setRecorded({ key: Date.now(), status: e.payload }));
+    const u7 = listen<string>("record-cancelled", (e) => toast(e.payload));
     return () => {
+      void u6.then((f) => f());
+      void u7.then((f) => f());
       void u5.then((f) => f());
       void u1.then((f) => f());
       void u2.then((f) => f());
@@ -330,7 +337,7 @@ export default function App() {
 
   const modelsView = models.map((m) => (measured[m.id] ? { ...m, measured: measured[m.id] } : m));
   const picker = <ModelPicker models={modelsView} value={model} onChange={chooseModel} favorites={favorites} onToggleFavorite={toggleFavorite} />;
-  const tools = <ToolsMenu onManage={() => go("settings", "connectors")} />;
+  const tools = <ToolsMenu onManage={() => go("settings", "connectors")} onError={toast} />;
   const project = projects.find((p) => p.id === activeProject);
   const initials = initialsOf(userName);
   const retryModels = [...new Set([...favorites, ...(model ? [model] : []), ...models.filter((m) => m.local).map((m) => m.id)])].slice(0, 12);
@@ -340,7 +347,7 @@ export default function App() {
     <div className="shell">
     <WindowControls />
     {/* While a dialog is open the page behind it is inert (not focusable, hidden from assistive tech). */}
-    <div className="app" inert={searchOpen || sheetOpen || page === "settings" || undefined} aria-hidden={searchOpen || sheetOpen || page === "settings" || undefined}>
+    <div className="app" inert={searchOpen || sheetOpen || page === "settings" || !!recorded || undefined} aria-hidden={searchOpen || sheetOpen || page === "settings" || !!recorded || undefined}>
       <Sidebar
         collapsed={collapsed}
         conversations={convs}
@@ -519,6 +526,7 @@ export default function App() {
     )}
     {searchOpen && <SearchPalette onOpen={openChat} onClose={() => setSearchOpen(false)} />}
     {sheetOpen && <ShortcutsSheet onClose={() => setSheetOpen(false)} />}
+    {recorded && <RecordSkillDialog key={recorded.key} status={recorded.status} models={models} defaultModel={model} onClose={() => setRecorded(null)} toast={toast} />}
     </div>
   );
 }

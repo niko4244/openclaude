@@ -6,6 +6,7 @@ mod computer;
 mod mcp_oauth;
 mod pdf;
 mod providers;
+mod recorder;
 mod plugins;
 mod voice;
 mod db;
@@ -140,6 +141,7 @@ fn check_ui_setting(key: &str, value: &str) -> Res<()> {
     const UI_KEYS: &[&str] = &[
         "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
         "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled", "android_devices_enabled", "auto_update",
+        "record_mic", "record_model",
     ];
     if key.starts_with("feedback:") {
         return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
@@ -1384,6 +1386,98 @@ async fn voice_transcribe(state: State<'_, Arc<AppState>>, audio_b64: String, mi
     voice::transcribe(&gw, stt.as_deref(), audio, &mime, &work_dir).await.map_err(|err| format!("{err:#}"))
 }
 
+// ---------- record a skill
+
+fn data_dir(state: &AppState) -> Res<std::path::PathBuf> {
+    state.mcp_config_path.parent().map(|p| p.to_path_buf()).ok_or_else(|| "no data dir".into())
+}
+
+/// Starts only from the user's click on "Record a skill". It is not a model tool, so chats
+/// and background tasks can never start it.
+#[tauri::command]
+async fn record_start(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<()> {
+    recorder::start(&data_dir(&state)?.join("recordings")).map_err(e)?;
+    if let Err(err) = shell::open_recorder(&app) {
+        recorder::discard();
+        return Err(e(err));
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn record_status() -> Option<recorder::Status> {
+    recorder::status()
+}
+
+#[tauri::command]
+fn record_note(text: String) -> Res<()> {
+    recorder::note(&text).map_err(e)
+}
+
+/// Ends the recording and hands it to the main window for review.
+#[tauri::command]
+async fn record_stop(app: tauri::AppHandle, audio_b64: Option<String>, mime: Option<String>) -> Res<recorder::Status> {
+    use base64::Engine;
+    let audio = match audio_b64.filter(|a| !a.is_empty()) {
+        Some(a) => Some((base64::engine::general_purpose::STANDARD.decode(a).map_err(e)?, mime.unwrap_or_else(|| "audio/webm".into()))),
+        None => None,
+    };
+    let res = recorder::stop(audio).await.map_err(|err| format!("{err:#}"));
+    shell::close_recorder(&app);
+    shell::show_main(&app);
+    match &res {
+        Ok(st) => app.emit_to("main", "record-finished", st).map_err(e)?,
+        Err(err) => app.emit_to("main", "record-cancelled", err).map_err(e)?,
+    }
+    res
+}
+
+#[tauri::command]
+async fn record_cancel(app: tauri::AppHandle) -> Res<()> {
+    recorder::discard();
+    shell::close_recorder(&app);
+    shell::show_main(&app);
+    app.emit_to("main", "record-cancelled", "Recording discarded.").map_err(e)
+}
+
+#[tauri::command]
+async fn record_frames() -> Res<Vec<recorder::Preview>> {
+    recorder::previews().await.map_err(e)
+}
+
+#[tauri::command]
+async fn record_transcribe(state: State<'_, Arc<AppState>>) -> Res<String> {
+    let stt = state.db.lock().unwrap().get_setting("stt_model").filter(|s| !s.trim().is_empty());
+    let gw = state.gateway.read().await.clone();
+    recorder::transcribe(&gw, stt.as_deref()).await.map_err(|err| format!("{err:#}"))
+}
+
+#[tauri::command]
+async fn record_generate(state: State<'_, Arc<AppState>>, model: String, narration: String, on_text: Channel<String>) -> Res<recorder::Draft> {
+    let gw = state.gateway.read().await.clone();
+    let (gw, wire) = providers::route(&state.db.lock().unwrap(), &gw, &model);
+    recorder::generate(&gw, &wire, &narration, |t| {
+        let _ = on_text.send(t);
+    })
+    .await
+    .map_err(|err| format!("{err:#}"))
+}
+
+#[tauri::command]
+fn record_save(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: String, description: String, body: String) -> Res<recorder::Saved> {
+    let saved = recorder::save(&state.plugins, &data_dir(&state)?.join("recorded-skills"), &name, &description, &body).map_err(e)?;
+    let _ = app.emit("plugins-changed", ());
+    Ok(saved)
+}
+
+#[tauri::command]
+fn record_discard() {
+    recorder::discard();
+}
+
 // ---------- quick entry / shell
 
 // Window-creating commands must be async: a sync command runs on the main thread,
@@ -1473,7 +1567,7 @@ pub fn run() {
         // app runs are forwarded to this instance's on_open_url handler.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::QUICK]).build())
+        .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::QUICK, shell::RECORDER]).build())
         .register_uri_scheme_protocol("artifact", |ctx, req| serve_artifact(ctx.app_handle(), &req))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1492,6 +1586,8 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir)?;
             diag::init(&data_dir);
+            // Frames of a recording that was never saved (crash, kill) do not outlive it.
+            recorder::purge(&data_dir.join("recordings"));
             let db = Db::open(&data_dir.join("openclaude.db"))?;
             let base_url = std::env::var("OPENCLAUDE_GATEWAY_URL")
                 .ok()
@@ -1565,6 +1661,14 @@ pub fn run() {
                 tauri::WindowEvent::Focused(false) if window.label() == shell::QUICK => {
                     let _ = window.hide();
                 }
+                // The indicator closed some other way while recording: never keep recording unseen.
+                tauri::WindowEvent::Destroyed if window.label() == shell::RECORDER => {
+                    if recorder::status().is_some_and(|s| s.recording) {
+                        recorder::discard();
+                        shell::show_main(window.app_handle());
+                        let _ = window.emit_to("main", "record-cancelled", "Recording discarded: its indicator was closed.");
+                    }
+                }
                 _ => {}
             }
         })
@@ -1628,6 +1732,16 @@ pub fn run() {
             get_probes,
             quick_entry_toggle,
             voice_transcribe,
+            record_start,
+            record_status,
+            record_note,
+            record_stop,
+            record_cancel,
+            record_frames,
+            record_transcribe,
+            record_generate,
+            record_save,
+            record_discard,
             chrome_bridge_info,
             chrome_bridge_enable,
             plugins_list,

@@ -271,6 +271,21 @@ export const api = {
   probeModel: (model: string) => invoke<ProbeReport>("probe_model", { model }),
   getProbes: () => invoke<ProbeReport[]>("get_probes"),
   appInfo: () => invoke<{ version: string; username: string; data_dir: string; mcp_config: string }>("app_info"),
+
+  recordStart: () => invoke<void>("record_start"),
+  recordStatus: () => invoke<RecordStatus | null>("record_status"),
+  recordNote: (text: string) => invoke<void>("record_note", { text }),
+  recordStop: (audioB64: string | null, mime: string | null) => invoke<RecordStatus>("record_stop", { audioB64, mime }),
+  recordCancel: () => invoke<void>("record_cancel"),
+  recordFrames: () => invoke<{ t_ms: number; data_url: string }[]>("record_frames"),
+  recordTranscribe: () => invoke<string>("record_transcribe"),
+  recordGenerate: (model: string, narration: string, onText: (t: string) => void) => {
+    const ch = new Channel<string>();
+    ch.onmessage = onText;
+    return invoke<SkillDraft>("record_generate", { model, narration, onText: ch });
+  },
+  recordSave: (name: string, description: string, body: string) => invoke<{ name: string; path: string }>("record_save", { name, description, body }),
+  recordDiscard: () => invoke<void>("record_discard"),
 };
 
 export function textOf(content: Message["content"]): string {
@@ -320,6 +335,8 @@ export type DeviceInventory = {
 export type ProviderPreset = { id: string; name: string; base_url: string; needs_key: boolean };
 export type ProviderConfig = { id: string; name: string; base_url: string; preset: string | null; enabled: boolean };
 export type ProviderView = ProviderConfig & { has_key: boolean; models: number; status: GatewayStatus | null };
+export type RecordStatus = { recording: boolean; elapsed_ms: number; frames: number; notes: { t_ms: number; text: string }[]; has_audio: boolean; error: string | null };
+export type SkillDraft = { name: string; description: string; body: string };
 export type ErrorGroup = { fingerprint: string; kind: string; message: string; count: number; first_at: number; last_at: number; detail: string };
 export type PendingAction = { id: string; conversation_id: string; conversation_title: string; server: string; tool: string; arguments: unknown; model: string | null; status: string; result: string | null; created_at: number };
 export type Proactive = { enabled: boolean; brief_at: string; every_hours: number; model: string };

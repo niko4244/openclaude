@@ -383,3 +383,29 @@ table.models td.unk { color: var(--text-faint); }
 .settings-modal input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .update-banner { position: fixed; bottom: 18px; right: 18px; z-index: 95; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); font-size: 13.5px; }
+
+/* ---------- record a skill: indicator window and review dialog */
+.recorder-root body { background: var(--bg-elev); }
+.recorder { height: 100vh; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 14px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-elev); }
+.rec-live { display: inline-flex; align-items: center; gap: 8px; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); flex: none; animation: rec-pulse 1.4s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
+.rec-time { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 36px; }
+.rec-count { white-space: nowrap; }
+.rec-note { flex: 1; min-width: 0; border: 1px solid var(--border-strong); background: var(--bg); border-radius: 8px; padding: 5px 9px; font-size: 13px; }
+.rec-stop { padding: 4px 10px; }
+.rec-busy { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.record-dialog { width: min(760px, 94vw); max-height: 84vh; display: flex; flex-direction: column; }
+.rd-head { display: flex; align-items: center; gap: 8px; padding: 14px 18px 2px; }
+.rd-head h2 { margin: 0; font-size: 17px; flex: 1; }
+.rd-body { padding: 0 18px 6px; overflow-y: auto; }
+.rd-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+.rd-frames { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 2px; }
+.rd-frames figure { margin: 0; flex: none; }
+.rd-frames img { width: 132px; display: block; border-radius: 6px; border: 1px solid var(--border); }
+.rd-frames figcaption { font-size: 11px; color: var(--text-dim); text-align: center; }
+.rd-notes { margin: 0; padding-left: 18px; font-size: 13px; }
+.rd-stream { max-height: 200px; overflow: auto; white-space: pre-wrap; font: 12px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
+.rd-skill { font-size: 12.5px; }
+.field .label { font-size: 13.5px; font-weight: 500; }
