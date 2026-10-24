@@ -81,11 +81,7 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Pages are full width.
   - Gate: desktop 38/38, a11y 0, plugins 11/11.
 - **Neutral palette:** sidebar, main and divider are pixel-identical to the reference in light and dark (VISUAL_BASELINES §1c). The accent, logo and fonts stay ours by mission rule. a11y 0 in both themes.
-- **iPhone (Nik asked to test devices with his iPhone, 2026-10-24):**
-  - The phone is paired over Bluetooth only; there's no USB VID_05AC device. Apple Mobile Device Service is installed but stopped.
-  - Nik needs to connect a data cable, unlock the phone, tap "Trust", and start the service (opening iTunes/iMazing does that).
-  - From Windows an iPhone supports detection, info and screenshots (pymobiledevice3; iOS 17+ needs Developer Mode plus an admin tunnel). Taps and typing need WebDriverAgent built on a Mac, so they're not possible from Windows.
-  - adb/Android tools don't apply to an iPhone.
+- **iPhone / live device test:** skipped at Nik's request (2026-10-24). The phone was only on Bluetooth. Android device tools stay verified by unit tests against a stub adb (matrix row 25: Partial). Revisit only if Nik connects an Android device or enables Windows Hypervisor Platform for the emulator.
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
