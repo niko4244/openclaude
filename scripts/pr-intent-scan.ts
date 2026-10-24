@@ -24,9 +24,18 @@ type CliOptions = {
   failOn: FindingSeverity
 }
 
+// Node's default is 1 MiB, which this PR's 2 MB diff exceeds: spawnSync then returns
+// status null with ENOBUFS and a truncated stdout, which used to be reported as
+// "git diff failed" followed by a megabyte of diff. Keep a real ceiling, but one a
+// normal large pull request fits in.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024
+const GIT_ERROR_TEXT_LIMIT = 2000
+
 const SELF_EXCLUDED_FILES = new Set([
   'scripts/pr-intent-scan.ts',
   'scripts/pr-intent-scan.test.ts',
+  'scripts/pr-intent-comment.ts',
+  'scripts/pr-intent-comment.test.ts',
 ])
 
 const SHORTENER_DOMAINS = [
@@ -51,12 +60,44 @@ const SUSPICIOUS_DOWNLOAD_DOMAINS = [
   'catbox.moe',
 ]
 
+// `resolved` entries in a dependency lockfile point at the registry's immutable
+// tarballs. Counting each one as a "direct link to executable payload" made a normal
+// lockfile produce hundreds of high findings, drowning out real ones. Only these
+// hosts, only tarballs, and only inside lockfiles are exempt; a lockfile entry that
+// points anywhere else is still reported.
+const LOCKFILE_BASENAMES = new Set([
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lock',
+  'bun.lockb',
+])
+
+const TRUSTED_REGISTRY_HOSTS = new Set([
+  'registry.npmjs.org',
+  'registry.yarnpkg.com',
+  'npm.pkg.github.com',
+])
+
 const URL_REGEX = /\bhttps?:\/\/[^\s)>"']+/gi
 const LONG_BASE64_REGEX = /\b(?:[A-Za-z0-9+/]{80,}={0,2}|[A-Za-z0-9_-]{80,})\b/
 const EXECUTABLE_PATH_REGEX =
   /\.(?:sh|bash|zsh|ps1|exe|msi|pkg|deb|rpm|zip|tar|tgz|gz|xz|dmg|appimage)(?:$|[?#])/i
 const SENSITIVE_PATH_REGEX =
   /^(?:\.github\/workflows\/|scripts\/|bin\/|install(?:\/|\.|$)|.*(?:Dockerfile|docker-compose|compose\.ya?ml)$)/i
+
+// A payload counts as inline only when the encoded argument is written out on the
+// same line; a bare flag is how a wrapper passes a benign script.
+const INLINE_ENCODED_POWERSHELL_REGEX =
+  /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b(?:\s*["'])?\s*[A-Za-z0-9+/]{16,}={0,2}/i
+const ENCODED_POWERSHELL_REGEX =
+  /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b/i
+const ENCODED_COMMAND_FLAG_REGEX = /(?:-enc|-encodedcommand)\b/i
+const BASE64_LITERAL_PATTERN = '[A-Za-z0-9+/]{16,}={0,2}'
+const BASE64_ASSIGNMENT_REGEX = new RegExp(
+  `(?:^|[\\s;({,])(?:(?:const|let|var)\\s+)?\\$?([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*[\\w<>[\\]|.]+\\s*)?=\\s*["'](${BASE64_LITERAL_PATTERN})["']`,
+)
 
 function parseOptions(argv: string[]): CliOptions {
   const options: CliOptions = {
@@ -175,6 +216,15 @@ function hostMatches(hostname: string, domain: string): boolean {
   return hostname === domain || hostname.endsWith(`.${domain}`)
 }
 
+function isRegistryTarballInLockfile(file: string, url: URL): boolean {
+  const basename = file.split('/').pop()?.toLowerCase() ?? ''
+  if (!LOCKFILE_BASENAMES.has(basename)) return false
+  if (![...TRUSTED_REGISTRY_HOSTS].some(host => hostMatches(url.hostname.toLowerCase(), host))) {
+    return false
+  }
+  return /\.(?:tgz|tar\.gz)$/i.test(url.pathname)
+}
+
 function hasSuspiciousDownloadIndicators(url: URL): boolean {
   const combined = `${url.pathname}${url.search}`.toLowerCase()
   return (
@@ -228,7 +278,7 @@ function findUrlFindings(line: DiffLine): Finding[] {
         detail: `Added external file-hosting link: ${hostname}`,
         excerpt: trimExcerpt(line.content),
       })
-    } else if (isExecutableDownload) {
+    } else if (isExecutableDownload && !isRegistryTarballInLockfile(line.file, parsed)) {
       findings.push({
         severity: 'high',
         code: 'executable-download-link',
@@ -273,6 +323,100 @@ function findSensitivePathFindings(line: DiffLine): Finding[] {
   return []
 }
 
+type PayloadAssignment = {
+  file: string
+  line: number
+}
+
+// A base64 literal assigned to a name anywhere in the diff: `const enc = "..."`,
+// `$enc = "..."`, `ENC="..."`.
+function collectPayloadAssignments(
+  lines: DiffLine[],
+): Map<string, PayloadAssignment[]> {
+  const assignments = new Map<string, PayloadAssignment[]>()
+
+  for (const line of lines) {
+    const match = BASE64_ASSIGNMENT_REGEX.exec(line.content)
+    if (!match) continue
+
+    const name = match[1]
+    const entries = assignments.get(name) ?? []
+    const duplicate = entries.some(
+      entry => entry.file === line.file && entry.line === line.line,
+    )
+    if (!duplicate) {
+      entries.push({ file: line.file, line: line.line })
+      assignments.set(name, entries)
+    }
+  }
+
+  return assignments
+}
+
+function resolvePayloadAssignment(
+  assignments: Map<string, PayloadAssignment[]>,
+  file: string,
+  name: string,
+): PayloadAssignment | null {
+  const entries = assignments.get(name)
+  if (!entries || entries.length === 0) return null
+
+  const inFile = entries.filter(entry => entry.file === file)
+  if (inFile.length === 1) return inFile[0]
+  if (inFile.length > 1) return null
+
+  // The payload may be built in one file and used in another; resolve that only
+  // when a single file defines the name, so unrelated constants never pair up.
+  return entries.length === 1 ? entries[0] : null
+}
+
+function encodedPayloadVariable(content: string): string | null {
+  const flag = ENCODED_COMMAND_FLAG_REGEX.exec(content)
+  if (!flag) return null
+
+  const rest = content.slice(flag.index + flag[0].length)
+  const braced = /^\s*["'`]?\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(rest)
+  if (braced) return braced[1]
+
+  const variable = /^\s*["'`]?\s*\$([A-Za-z_][A-Za-z0-9_]*)/.exec(rest)
+  if (variable) return variable[1]
+
+  const identifier = /^\s*["'`]?\s*([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_$+/=-])/.exec(
+    rest,
+  )
+  return identifier ? identifier[1] : null
+}
+
+function findEncodedVariableFindings(
+  line: DiffLine,
+  assignments: Map<string, PayloadAssignment[]>,
+): Finding[] {
+  if (!ENCODED_POWERSHELL_REGEX.test(line.content)) return []
+  if (INLINE_ENCODED_POWERSHELL_REGEX.test(line.content)) return []
+
+  const name = encodedPayloadVariable(line.content)
+  if (!name) return []
+
+  const assignment = resolvePayloadAssignment(assignments, line.file, name)
+  if (!assignment) return []
+
+  const origin =
+    assignment.file === line.file
+      ? `line ${assignment.line}`
+      : `${assignment.file}:${assignment.line}`
+
+  return [
+    {
+      severity: 'high',
+      code: 'powershell-encoded-variable',
+      file: line.file,
+      line: line.line,
+      detail: `Added encoded PowerShell invocation with a base64 payload assigned to ${name} at ${origin}`,
+      excerpt: trimExcerpt(line.content),
+    },
+  ]
+}
+
 function findCommandFindings(line: DiffLine): Finding[] {
   const findings: Finding[] = []
   const lower = line.content.toLowerCase()
@@ -285,7 +429,7 @@ function findCommandFindings(line: DiffLine): Finding[] {
     ],
     [
       'powershell-encoded',
-      /\bpowershell(?:\.exe)?\b.*(?:-enc|-encodedcommand)\b/i,
+      INLINE_ENCODED_POWERSHELL_REGEX,
       'Added encoded PowerShell invocation',
     ],
     [
@@ -367,24 +511,35 @@ function findCommandFindings(line: DiffLine): Finding[] {
 }
 
 export function scanAddedLines(lines: DiffLine[]): Finding[] {
-  const findings = lines
-    .filter(line => !SELF_EXCLUDED_FILES.has(line.file))
-    .flatMap(line => [
+  const scanned = lines.filter(line => !SELF_EXCLUDED_FILES.has(line.file))
+  const assignments = collectPayloadAssignments(scanned)
+
+  const findings = scanned.flatMap(line => [
     ...findUrlFindings(line),
     ...findCommandFindings(line),
     ...findSensitivePathFindings(line),
+    ...findEncodedVariableFindings(line, assignments),
   ])
   return uniqueFindings(findings)
+}
+
+function gitErrorText(stderr: string | Buffer | null | undefined): string {
+  const text = String(stderr ?? '').trim()
+  if (!text) return 'no stderr'
+  return text.length > GIT_ERROR_TEXT_LIMIT
+    ? `${text.slice(0, GIT_ERROR_TEXT_LIMIT)}… (truncated)`
+    : text
 }
 
 export function getGitDiff(baseRef: string, headRef = 'HEAD'): string {
   const mergeBase = spawnSync('git', ['merge-base', baseRef, headRef], {
     encoding: 'utf8',
+    maxBuffer: GIT_MAX_BUFFER,
   })
 
-  if (mergeBase.status !== 0) {
+  if (mergeBase.error || mergeBase.status !== 0) {
     throw new Error(
-      `Could not determine merge-base between ${baseRef} and ${headRef}: ${mergeBase.stderr.trim() || mergeBase.stdout.trim()}`,
+      `Could not determine merge-base between ${baseRef} and ${headRef}: ${mergeBase.error?.message ?? gitErrorText(mergeBase.stderr)}`,
     )
   }
 
@@ -392,11 +547,16 @@ export function getGitDiff(baseRef: string, headRef = 'HEAD'): string {
   const diff = spawnSync(
     'git',
     ['diff', '--unified=0', '--no-ext-diff', `${base}...${headRef}`],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER },
   )
 
+  // An ENOBUFS/SIGTERM has status null and little or no stderr; the error message is
+  // the only useful part, and stdout must not be echoed (it can be megabytes).
+  if (diff.error) {
+    throw new Error(`git diff failed: ${diff.error.message}`)
+  }
   if (diff.status !== 0) {
-    throw new Error(`git diff failed: ${diff.stderr.trim() || diff.stdout.trim()}`)
+    throw new Error(`git diff failed (exit ${diff.status}): ${gitErrorText(diff.stderr)}`)
   }
 
   return diff.stdout

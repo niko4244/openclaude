@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "enabled": true,
+  "intervalHours": 6,
+  "monitoring": {
+    "repositoryWorkflow": true,
+    "desktopApp": true
+  },
+  "autonomy": "research",
+  "budget": {
+    "paidCallsAllowed": false,
+    "maxModelCallsPerRun": 0,
+    "maxRunMinutes": 15,
+    "maxInvestigationsPerRun": 3,
+    "maxImplementationsPerRun": 1
+  },
+  "limits": {
+    "requestTimeoutMs": 20000,
+    "retries": 2,
+    "retryDelayMs": 1500,
+    "maxItemsPerSource": 200,
+    "lockStaleMinutes": 20
+  },
+  "rea": {
+    "enabled": true,
+    "setupAuthorized": false,
+    "command": "rea",
+    "setupCommand": "npx rea-agents@latest setup"
+  },
+  "engineering": {
+    "worktreeRoot": "../oc-evolution",
+    "gates": [
+      {
+        "name": "engine-tests",
+        "command": "node",
+        "args": ["--test", "desktop/feature-intel/tests/"],
+        "timeoutMs": 180000
+      },
+      {
+        "name": "desktop-typecheck",
+        "command": "npx",
+        "args": ["tsc", "-b"],
+        "cwd": "desktop",
+        "timeoutMs": 300000
+      }
+    ],
+    "maxGateMinutes": 12
+  }
+}

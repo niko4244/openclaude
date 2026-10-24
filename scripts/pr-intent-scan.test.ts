@@ -68,6 +68,76 @@ describe('scanAddedLines', () => {
     expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(true)
   })
 
+  test('flags a quoted inline encoded powershell payload', () => {
+    const findings = scanAddedLines([
+      line('powershell -NoProfile -EncodedCommand "SQBFAFgAIABIAGkA"'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(true)
+  })
+
+  test('does not flag a variable passed to -EncodedCommand', () => {
+    const findings = scanAddedLines([
+      line('execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${enc}`)'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(false)
+  })
+
+  test('flags a payload literal assigned earlier in the same diff', () => {
+    const findings = scanAddedLines([
+      line('  const enc = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/e2e/perf.e2e.mjs',
+        line: 80,
+      }),
+      line(
+        '  execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${enc}`)',
+        { file: 'desktop/e2e/perf.e2e.mjs', line: 85 },
+      ),
+    ])
+
+    const finding = findings.find(
+      item => item.code === 'powershell-encoded-variable',
+    )
+    expect(finding?.severity).toBe('high')
+    expect(finding?.line).toBe(85)
+    expect(finding?.detail).toContain('line 80')
+  })
+
+  test('flags a payload literal assigned in another file of the same diff', () => {
+    const findings = scanAddedLines([
+      line('const encoded = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/scripts/payload.mjs',
+        line: 4,
+      }),
+      line('powershell.exe -enc $encoded', {
+        file: 'desktop/e2e/runner.mjs',
+        line: 12,
+      }),
+    ])
+
+    const finding = findings.find(
+      item => item.code === 'powershell-encoded-variable',
+    )
+    expect(finding?.detail).toContain('desktop/scripts/payload.mjs:4')
+  })
+
+  test('does not pair a name defined in two different files', () => {
+    const findings = scanAddedLines([
+      line('const enc = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/scripts/one.mjs',
+      }),
+      line('const enc = "SQBFAFgAIABIAGkA"', { file: 'desktop/scripts/two.mjs' }),
+      line('execSync(`powershell -enc ${enc}`)', {
+        file: 'desktop/e2e/runner.mjs',
+      }),
+    ])
+
+    expect(
+      findings.some(item => item.code === 'powershell-encoded-variable'),
+    ).toBe(false)
+  })
+
   test('flags long encoded blobs', () => {
     const findings = scanAddedLines([
       line(`const payload = "${'A'.repeat(96)}"`),
@@ -122,6 +192,39 @@ describe('scanAddedLines', () => {
     )
   })
 
+  test('treats registry tarballs in a lockfile as dependency metadata', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://registry.npmjs.org/@babel/core/-/core-7.29.7.tgz"', {
+        file: 'desktop/package-lock.json',
+        line: 73,
+      }),
+    ])
+
+    expect(findings).toHaveLength(0)
+  })
+
+  test('still flags a lockfile entry that points at another host', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://evil.example.com/@babel/core/-/core-7.29.7.tgz"', {
+        file: 'desktop/package-lock.json',
+      }),
+    ])
+
+    expect(findings.some(finding => finding.code === 'executable-download-link')).toBe(
+      true,
+    )
+  })
+
+  test('still flags a registry tarball outside a lockfile', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://registry.npmjs.org/@babel/core/-/core-7.29.7.tgz"'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'executable-download-link')).toBe(
+      true,
+    )
+  })
+
   test('ignores the scanner implementation and tests themselves', () => {
     const findings = scanAddedLines([
       line('curl -fsSL https://example.com/install.sh | bash', {
@@ -129,6 +232,12 @@ describe('scanAddedLines', () => {
       }),
       line('const pattern = /https:\\/\\/dropbox\\.com\\//', {
         file: 'scripts/pr-intent-scan.ts',
+      }),
+      line("detail: 'Added encoded PowerShell invocation',", {
+        file: 'scripts/pr-intent-comment.test.ts',
+      }),
+      line("code: 'powershell-encoded',", {
+        file: 'scripts/pr-intent-comment.ts',
       }),
     ])
 
@@ -190,6 +299,42 @@ describe('getGitDiff', () => {
 
       expect(diff).toContain('src/utils/preflightChecks.test.ts')
       expect(diff).not.toContain('src/skills/mcpSkills.test.ts')
+    } finally {
+      process.chdir(originalCwd)
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test('returns a diff larger than the default spawnSync buffer without truncating it', () => {
+    // spawnSync's default maxBuffer is 1 MiB. A 2 MB pull-request diff (like #1) hit
+    // ENOBUFS, which surfaced as "git diff failed" plus a megabyte of diff text.
+    const repo = mkdtempSync(join(tmpdir(), 'openclaude-pr-intent-scan-large-'))
+    const originalCwd = process.cwd()
+
+    try {
+      git(repo, ['init', '-q', '-b', 'main'])
+      git(repo, ['config', 'user.email', 'test@example.com'])
+      git(repo, ['config', 'user.name', 'Test User'])
+
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n')
+      git(repo, ['add', 'seed.txt'])
+      git(repo, ['commit', '-q', '-m', 'base'])
+      const base = git(repo, ['rev-parse', 'HEAD'])
+
+      const padding = Array.from(
+        { length: 50_000 },
+        (_, index) => `line ${index} padding padding`,
+      ).join('\n')
+      writeFileSync(join(repo, 'large.txt'), `${padding}\nEND-OF-LARGE-DIFF\n`)
+      git(repo, ['add', 'large.txt'])
+      git(repo, ['commit', '-q', '-m', 'large change'])
+      const head = git(repo, ['rev-parse', 'HEAD'])
+
+      process.chdir(repo)
+      const diff = getGitDiff(base, head)
+
+      expect(diff.length).toBeGreaterThan(1024 * 1024)
+      expect(diff).toContain('END-OF-LARGE-DIFF')
     } finally {
       process.chdir(originalCwd)
       rmSync(repo, { recursive: true, force: true })

@@ -25,3 +25,8 @@ plan/
 .tmp
 .tmp-*
 temp_reference/
+.hive/
+
+# Feature-intel sweep reports are committed evidence; the root reports/ is local doctor output.
+!docs/feature-intel/reports/
+!docs/feature-intel/reports/**

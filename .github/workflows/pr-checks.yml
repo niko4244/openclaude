@@ -72,6 +72,8 @@ jobs:
   pr-intent-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
 
     steps:
       - name: Check out repository
@@ -101,10 +103,29 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Suspicious PR intent scan
+        id: scan
+        continue-on-error: true
         env:
           PR_SCAN_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'origin/main' }}
           PR_SCAN_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
-        run: bun run security:pr-scan -- --base "$PR_SCAN_BASE" --head "$PR_SCAN_HEAD"
+        run: bun run security:pr-scan -- --base "$PR_SCAN_BASE" --head "$PR_SCAN_HEAD" --json > "$RUNNER_TEMP/pr-intent-scan.json"
+
+      # This job runs the pull request's own code with a read-only token. The
+      # report is published by pr-intent-comment.yml, which never runs it.
+      - name: Upload the scan report
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-intent-scan
+          path: ${{ runner.temp }}/pr-intent-scan.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail when the scan does not pass
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: |
+          echo "::error::PR intent scan did not pass (high-severity findings or a scan error); see the step log and the pull request comment."
+          exit 1
 
   unit-tests:
     needs: changes
