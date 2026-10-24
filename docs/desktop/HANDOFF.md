@@ -85,6 +85,33 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
+## Code tab extras (branch `feat/desktop-code-extras`, not merged)
+- **Where:** worktree `G:\oc-build\oc-code-extras` (G: because C: was nearly full and the side-session Write/Edit hook blocks everything under `C:\Users\nikma`). Build with `$env:CARGO_TARGET_DIR = "G:\oc-build\code-extras"`; the exe is `G:\oc-build\code-extras\release\openclaude-desktop.exe`. `desktop/node_modules` there is a junction to the main checkout's.
+- **Device preview (web emulation):** Code tab → **📱 Device**, or **📱 Device preview** next to a detected dev-server URL in the Terminal.
+  - Backend: `browser.rs` § device preview. A separate **headless** Edge/Chrome on `<data>/device-preview` (not the model's browser profile).
+  - CDP: `Emulation.setDeviceMetricsOverride` + `setTouchEmulationEnabled` + `setUserAgentOverride` (UA client hints for Android), and `Page.startScreencast` frames streamed to `DevicePreview.tsx`. The panel draws the device outline (island / home button / punch hole / tablet) and forwards taps (`Input.dispatchTouchEvent`), wheel and keys.
+  - Presets: iPhone 16 Pro 402×874@3, iPhone SE 375×667@2, Pixel 8 412×915@2.625, Galaxy S24 360×780@3, iPad 820×1180@2. Rotate resizes without a reload; a device switch reloads (touch and UA are read at document load).
+  - Local URLs only (`is_local_preview_url`). It is labelled "Web emulation", not a native simulator: no WebKit, no OS chrome, no native APIs.
+  - Gotcha: start the screencast **before** `Page.navigate` / `Page.reload`; mid-navigation Chromium answers "Not attached to an active page".
+- **Android emulator from the Code tab:** the device panel's footer reuses `devices_info`. It shows Start buttons for AVDs when an Emulator exists; otherwise a setup hint. `devices.rs` now also reports Windows Hypervisor Platform read-only (`Win32_OptionalFeature`, no elevation); it is off on this PC (InstallState 2). Nothing changes system settings.
+- **Remote (SSH):** the folder button is now a menu: Local folder… / Remote (SSH)….
+  - Host comes from the `~/.ssh/config` Host entries (datalist) or typed `user@host`; the folder must be absolute or `~/…`.
+  - `remote_add` asks in a **native** dialog (page script can't answer it), like the folder picker grants local folders. Grants live in setting `remote_workspaces`, which the UI can't write directly.
+  - `remote_check` runs a read-only script over ssh: Node, `command -v openclaude`, git. When the CLI is missing it shows `npm install -g @gitlawb/openclaude` (Node 20+).
+  - `code_start{host}` spawns `ssh -T -o BatchMode=yes … -o ExitOnForwardFailure=yes -R 127.0.0.1:<rand>:127.0.0.1:4000 -- host '<script>'`. The script runs `exec openclaude --print … --input-format/--output-format stream-json [--permission-prompt-tool stdio]`, so approvals work exactly as locally.
+  - The API key is the **first stdin line**, read by `IFS= read -r` (a shell builtin): never on a command line on either machine, never logged.
+  - git status/diff go over ssh (remote status polls every 15 s). The terminal and worktrees are local-only and hidden for SSH folders. Plugins aren't passed to remote sessions.
+  - Known ssh failures (host key, publickey, forwarding refused, unreachable, missing folder or CLI) become plain-words hints (`ssh_error_hint`).
+- **SSH not live-tested:** there is no local sshd (`Get-Service sshd` → none). Command construction, quoting, injection rejection, tunnel rewrite, config parsing and hints are unit-tested (`agent::tests::ssh_*`, `tunnel_*`, `remote_*`). The running podman WSL machine exposes an sshd, but it wasn't used: it's infrastructure, and the brief said to test only against an existing sshd service.
+- **Pip, the mascot** (`Pip.tsx`): an original 15×15 pixel robot in our teal (`--accent`) with an amber antenna spark (not a crab, not clay). Shown in the Code empty state ("Ready when you are") and as the working indicator (`.pip-working`, role=status). It blinks when idle; working, it hops, glances and its spark flickers. Under `prefers-reduced-motion` everything stops.
+- **Evidence (2026-10-24):**
+  - `e2e/code-extras.e2e.mjs` 20/20. It needs no model: the working indicator runs against a stub CLI via `OPENCLAUDE_BIN`.
+  - a11y 0 across 26 states, including the new code folder menu, Remote (SSH) form and device preview.
+  - Rust lib 102 passed (10 live tests ignored), plus the ignored live `device_preview_live_emulates_iphone` passing.
+  - `diagnostics.e2e` passes its Code-tab flow, but its `/openclaude/i` check on the checkout path fails for this worktree's name (`oc-code-extras`).
+  - The gateway's local models were down this session (LiteLLM can't reach Ollama), so `desktop.e2e` wasn't re-run. Its step 13 selectors (`.nav-item.mono`, Terminal) are unchanged.
+- **Merge note:** the sibling branches (record-skill, prompt-library) also touch `lib.rs` command registration, `styles.css`, the matrix and this file. Expect small textual conflicts.
+
 ## Next steps (in order)
 1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.
 2. Visual: compare against reference screenshots once Nik drops them into `docs/parity/reference/`.
