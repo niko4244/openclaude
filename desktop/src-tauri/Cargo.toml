@@ -1,6 +1,6 @@
 [package]
 name = "openclaude-desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "OpenClaude Desktop - a desktop AI workspace on your own LiteLLM gateway"
 authors = ["OpenClaude contributors"]
 license = "MIT"
