@@ -50,8 +50,8 @@ try {
   const task = await invoke("task_save", { task: { id: "", title: "Inbox probe", prompt: "Use the send_note tool to send the note: hello team. Then reply with one short sentence.", model, schedule: "manual", enabled: true, next_run_at: null, last_run_at: null, last_status: null, last_conversation_id: null, running: false, workspace: null } });
   await invoke("task_run_now", { id: task.id });
   await ui.click('.nav-item:has-text("Tasks")');
-  const row = ui.locator('.inbox [data-pending="send_note"]');
-  const queued = await row.waitFor({ timeout: 240000 }).then(() => true, () => false);
+  const row = ui.locator('.inbox [data-pending="send_note"]').first();
+  const queued = await row.waitFor({ timeout: 480000 }).then(() => true, () => false);
   const listed = (await invoke("pending_list")).filter((p) => p.status === "pending").length;
   record("background run queues the tool call instead of failing", queued, queued ? (await row.innerText()).replace(/\s+/g, " ").slice(0, 120) : `pending_list=${listed}, inbox rows=${await ui.locator(".inbox [data-pending]").count()}, page=${(await ui.locator(".page h1").innerText().catch(() => "?"))}`);
   if (queued) {
@@ -67,7 +67,10 @@ try {
       return i >= 0 && m.slice(i + 1).some((x) => x.role === "assistant" && x.status !== "error") ? m : null;
     }, 180000);
     record("the assistant continues in that chat after approval", !!cont);
-    record("nothing is left waiting", (await invoke("pending_list")).every((p) => p.status !== "pending"));
+    // small models sometimes queue the same call twice: decline the extras from the inbox too
+    for (const extra of (await invoke("pending_list")).filter((p) => p.status === "pending")) await invoke("pending_decide", { id: extra.id, approve: false });
+    const after = await invoke("pending_list");
+    record("approved and declined requests leave the inbox", after.every((p) => p.status !== "pending") && after.some((p) => p.id === pending.id && p.status === "done"), after.map((p) => p.status).join(","));
   }
 
   // proactive assistant: one click creates a morning brief and check-ins

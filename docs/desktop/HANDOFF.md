@@ -82,6 +82,10 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Gate: desktop 38/38, a11y 0, plugins 11/11.
 - **Neutral palette:** sidebar, main and divider are pixel-identical to the reference in light and dark (VISUAL_BASELINES §1c). The accent, logo and fonts stay ours by mission rule. a11y 0 in both themes.
 - **iPhone / live device test:** skipped at Nik's request (2026-10-24). The phone was only on Bluetooth. Android device tools stay verified by unit tests against a stub adb (matrix row 25: Partial). Revisit only if Nik connects an Android device or enables Windows Hypervisor Platform for the emulator.
+- **Merged 2026-10-24 (approved by Nik):** `feat/record-skill`, `feat/desktop-prompt-library` and `feat/desktop-code-extras` are merged into `feat/desktop-2.0`.
+  - Full gate on the merged tree: tsc 0, Rust 120, desktop 38/38, a11y 0, providers 6/6, diagnostics 6/6, inbox 7/7, record-skill 13/13, prompt-library 20/20, code-extras 20/20, artifact previews 4/4, isolation 4/4, sync 6/6, plugins 11/11.
+  - Model-dependent suites need warm models (pre-warm qwen-local / llama3.2:3b). A full GPU (other llama-server processes) makes cold loads exceed test timeouts.
+  - C: was down to 1.8 GB. Clearing `src-tauri/target/debug` and the record-skill worktree's target freed about 25 GB; both regenerate.
 - **Session 2026-10-24 (after the v0.2.0 release):**
   - Providers (row 27), self-maintenance (row 28), Duet-style proactive assistant and approvals inbox (row 29), and the repo secret scan (clean).
   - Parallel sessions, each in its own worktree and branch, to be merged after review:

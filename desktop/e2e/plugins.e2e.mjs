@@ -82,7 +82,7 @@ try {
 
   // 4. updates: everything was just cloned, so a check finds nothing to apply
   await ui.click('button:has-text("Check for updates")');
-  const t = await ui.locator(".toast").last().innerText({ timeout: 300000 });
+  const t = await ui.locator('.toast:has-text("up to date"), .toast:has-text("Updated")').last().innerText({ timeout: 300000 }).catch(async () => ui.locator(".toast").last().innerText());
   record("update check runs across GitHub plugins", /up to date|Updated/.test(t), t);
   await ui.click('[aria-label="Close settings"]');
 
