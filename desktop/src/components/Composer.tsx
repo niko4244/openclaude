@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowUp, FileText, Plus, Square } from "lucide-react";
+import { ArrowUp, BookMarked, FileText, Plus, Square } from "lucide-react";
 import { api, type Attachment, type AttachmentResult, type ContentPart, type SlashCommand } from "../api";
 import { VoiceButton } from "./VoiceButton";
 import { voiceMode } from "../voiceMode";
@@ -27,6 +27,9 @@ export function Composer({
   focusKey,
   onError,
   toolsSlot,
+  onOpenLibrary,
+  onPickPrompt,
+  insert,
 }: {
   onSend: (text: string, atts: Attachment[]) => void;
   onStop?: () => void;
@@ -39,6 +42,11 @@ export function Composer({
   focusKey?: string;
   onError: (msg: string) => void;
   toolsSlot?: ReactNode;
+  onOpenLibrary?: () => void;
+  /** A prompt picked from the "/" menu; the library flow fills and inserts it. */
+  onPickPrompt?: (name: string) => void;
+  /** Text to add to the draft (empty: just focus); a new key applies it once. */
+  insert?: { key: string; text: string } | null;
 }) {
   const [text, setText] = useState(initialDraft);
   const [atts, setAtts] = useState<Attachment[]>([]);
@@ -52,13 +60,19 @@ export function Composer({
     if (slashQ !== undefined && !cmds) void api.slashCommands().then(setCmds, () => setCmds([]));
   }, [slashQ, cmds]);
   useEffect(() => {
-    const un = listen("plugins-changed", () => setCmds(null));
-    return () => void un.then((f) => f());
+    const uns = ["plugins-changed", "prompts-changed"].map((ev) => listen(ev, () => setCmds(null)));
+    return () => uns.forEach((un) => void un.then((f) => f()));
   }, []);
   useEffect(() => setHl(0), [slashQ]);
   const q = (slashQ ?? "").toLowerCase();
   const matches = slashQ === undefined || menuOff || !cmds ? [] : cmds.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   const pick = (c: SlashCommand) => {
+    if (c.kind === "prompt" && onPickPrompt) {
+      setText("");
+      onDraftChange?.("");
+      onPickPrompt(c.name);
+      return;
+    }
     const t = `/${c.name} `;
     setText(t);
     onDraftChange?.(t);
@@ -66,6 +80,24 @@ export function Composer({
   };
 
   useEffect(() => setText(initialDraft), [focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const textRef = useRef(text);
+  textRef.current = text;
+  const applied = useRef(insert?.key);
+  useEffect(() => {
+    if (!insert || insert.key === applied.current) return;
+    applied.current = insert.key;
+    const t = textRef.current;
+    if (insert.text) {
+      const next = t.trim() ? `${t.trimEnd()}\n\n${insert.text}` : insert.text;
+      setText(next);
+      onDraftChange?.(next);
+    }
+    requestAnimationFrame(() => {
+      const el = ta.current;
+      el?.focus();
+      el?.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, [insert]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (autoFocus) ta.current?.focus();
   }, [focusKey, autoFocus]);
@@ -201,6 +233,11 @@ export function Composer({
         <button className="icon-btn bordered" title="Add files and photos" aria-label="Attach files" onClick={async () => addResults(await api.pickAttachments())}>
           <Plus size={17} strokeWidth={1.75} />
         </button>
+        {onOpenLibrary && (
+          <button className="icon-btn" title="Prompt library" aria-label="Prompt library" onClick={onOpenLibrary}>
+            <BookMarked size={16} strokeWidth={1.75} />
+          </button>
+        )}
         {toolsSlot}
         <VoiceButton
           onText={(t) => {

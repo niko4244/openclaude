@@ -7,12 +7,13 @@ import { disable as disableAutostart, enable as enableAutostart, isEnabled as au
 import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type ProviderPreset, type ProviderView, type ErrorGroup, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
-import { Blocks, Cloud, Cpu, Stethoscope, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
+import { PromptCollectionsTab } from "./PromptLibrary";
+import { BookMarked, Blocks, Cloud, Cpu, Stethoscope, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
 
-type Tab = "general" | "gateway" | "providers" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "diagnostics" | "about";
+type Tab = "general" | "gateway" | "providers" | "models" | "connectors" | "plugins" | "prompts" | "extensions" | "projects" | "diagnostics" | "about";
 const GROUPS: [string, [Tab, string, LucideIcon][]][] = [
   ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["providers", "Providers", Cloud], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["diagnostics", "Diagnostics", Stethoscope], ["about", "About", Info]]],
-  ["Customize", [["connectors", "Connectors (MCP)", Blocks], ["plugins", "Plugins", Plug], ["extensions", "Extensions", Package]]],
+  ["Customize", [["connectors", "Connectors (MCP)", Blocks], ["plugins", "Plugins", Plug], ["prompts", "Prompt library", BookMarked], ["extensions", "Extensions", Package]]],
 ];
 
 function Unk({ v }: { v: string | number | boolean | null | undefined }) {
@@ -80,6 +81,7 @@ export function Settings({
         {tab === "models" && <Models models={models} onRefresh={onModelsChanged} />}
         {tab === "connectors" && <Connectors toast={toast} />}
         {tab === "plugins" && <PluginsTab toast={toast} />}
+        {tab === "prompts" && <PromptCollectionsTab toast={toast} />}
         {tab === "extensions" && <Extensions toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
         {tab === "diagnostics" && <DiagnosticsTab toast={toast} onFixInCode={onFixInCode} />}

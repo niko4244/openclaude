@@ -8,6 +8,7 @@ mod pdf;
 mod providers;
 mod recorder;
 mod plugins;
+mod prompts;
 mod voice;
 mod db;
 mod diag;
@@ -1250,15 +1251,131 @@ async fn plugins_import(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, 
     Ok(done)
 }
 
+/// Plugin commands, skills and agents, then the prompt library's prompts.
 #[tauri::command]
 fn slash_commands(state: State<'_, Arc<AppState>>) -> Vec<plugins::Component> {
-    state.plugins.index().to_vec()
+    let mut v = state.plugins.index().to_vec();
+    v.extend(prompts::list(&state.prompts).into_iter().map(|p| plugins::Component {
+        kind: "prompt",
+        description: if p.description.is_empty() { p.title } else { format!("{}: {}", p.title, p.description) },
+        name: p.name,
+        plugin: p.collection_name,
+        arg_hint: p.arg_hint,
+        path: p.path,
+    }));
+    v
 }
 
 #[tauri::command]
 fn slash_expand(state: State<'_, Arc<AppState>>, name: String, args: String) -> Res<String> {
-    let c = state.plugins.find(&name).ok_or_else(|| format!("No command /{name}"))?;
-    plugins::render(&c, &args).map_err(e)
+    if let Some(c) = state.plugins.find(&name) {
+        return plugins::render(&c, &args).map_err(e);
+    }
+    let p = prompts::find(&state.prompts, &name).ok_or_else(|| format!("No command /{name}"))?;
+    Ok(plugins::substitute_args(&p.body, &args))
+}
+
+// ---------- prompt library
+
+#[derive(Serialize)]
+struct CollectionView {
+    #[serde(flatten)]
+    collection: plugins::Plugin,
+    prompts: usize,
+}
+
+#[tauri::command]
+fn prompts_list(state: State<'_, Arc<AppState>>) -> Vec<prompts::Prompt> {
+    prompts::list(&state.prompts)
+}
+
+#[tauri::command]
+fn prompt_collections(state: State<'_, Arc<AppState>>) -> Vec<CollectionView> {
+    if let Err(err) = prompts::ensure_mine(&state.prompts) {
+        eprintln!("my prompts: {err}");
+    }
+    state.prompts.registry().plugins.into_iter().map(|c| CollectionView { prompts: prompts::collection_prompts(&c).len(), collection: c }).collect()
+}
+
+#[tauri::command]
+async fn prompts_inspect(spec: String) -> Res<plugins::Offer> {
+    prompts::inspect(&spec).await.map_err(e)
+}
+
+#[tauri::command]
+async fn prompts_install(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, spec: String, names: Vec<String>) -> Res<Vec<String>> {
+    let offer = prompts::inspect(&spec).await.map_err(e)?;
+    let mut done = vec![];
+    for it in offer.items.into_iter().filter(|i| names.contains(&i.name)) {
+        let src = it.source.ok_or_else(|| format!("{}: {}", it.name, it.note.unwrap_or_default()))?;
+        done.push(state.prompts.install(&it.name, src).await.map_err(e)?.name);
+    }
+    let _ = app.emit("prompts-changed", ());
+    Ok(done)
+}
+
+#[tauri::command]
+fn prompt_collection_set(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String, enabled: Option<bool>, auto_update: Option<bool>) -> Res<()> {
+    state
+        .prompts
+        .update_entry(&id, |c| {
+            c.enabled = enabled.unwrap_or(c.enabled);
+            c.auto_update = auto_update.unwrap_or(c.auto_update) && c.repo_dir.is_some();
+        })
+        .map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn prompt_collection_update(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String) -> Res<Option<bool>> {
+    let r = state.prompts.update(&id, true).await.map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(r)
+}
+
+#[tauri::command]
+async fn prompt_collection_rollback(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.prompts.rollback(&id).await.map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn prompt_collection_remove(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    if id == prompts::MINE {
+        return Err("My prompts cannot be removed.".into());
+    }
+    state.prompts.remove(&id).map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn prompts_update_all(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<Vec<String>> {
+    let changed = state.prompts.update_all().await;
+    let _ = app.emit("prompts-changed", ());
+    Ok(changed)
+}
+
+/// Creates (`name` null) or rewrites a prompt in My prompts.
+#[tauri::command]
+fn prompt_save(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: Option<String>, draft: prompts::Draft) -> Res<prompts::Prompt> {
+    let p = prompts::save_mine(&state.prompts, name.as_deref(), &draft).map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(p)
+}
+
+#[tauri::command]
+fn prompt_delete(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
+    prompts::delete_mine(&state.prompts, &name).map_err(e)?;
+    let _ = app.emit("prompts-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn prompt_favorite(state: State<'_, Arc<AppState>>, id: String, on: bool) -> Res<()> {
+    prompts::set_favorite(&state.prompts, &id, on).map_err(e)
 }
 
 /// What enabled plugins' SessionStart hooks add to a new chat (shown in Settings).
@@ -1304,7 +1421,7 @@ async fn seed_plugins(state: &Arc<AppState>, app: &tauri::AppHandle) {
     }
 }
 
-/// Keeps GitHub plugins current: checks shortly after start, then every 15 minutes.
+/// Keeps GitHub plugins and prompt collections current: checks shortly after start, then every 15 minutes.
 fn start_plugin_updater(state: Arc<AppState>, app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         seed_plugins(&state, &app).await;
@@ -1316,6 +1433,9 @@ fn start_plugin_updater(state: Arc<AppState>, app: tauri::AppHandle) {
                 use tauri_plugin_notification::NotificationExt;
                 let _ = app.notification().builder().title("Plugins updated").body(changed.join(", ")).show();
                 let _ = app.emit("plugins-changed", ());
+            }
+            if !state.prompts.update_all().await.is_empty() {
+                let _ = app.emit("prompts-changed", ());
             }
             tokio::time::sleep(plugins::CHECK_EVERY).await;
         }
@@ -1609,6 +1729,7 @@ pub fn run() {
                 pending_ext: Default::default(),
                 running_tasks: Default::default(),
                 plugins: plugins::Plugins::new(data_dir.join("plugins")),
+                prompts: plugins::Plugins::new(data_dir.join("prompts")),
             });
             app.manage(state.clone());
             {
@@ -1756,6 +1877,18 @@ pub fn run() {
             plugins_import,
             slash_commands,
             slash_expand,
+            prompts_list,
+            prompt_collections,
+            prompts_inspect,
+            prompts_install,
+            prompt_collection_set,
+            prompt_collection_update,
+            prompt_collection_rollback,
+            prompt_collection_remove,
+            prompts_update_all,
+            prompt_save,
+            prompt_delete,
+            prompt_favorite,
             plugin_context_preview,
             sync_status,
             devices_info,

@@ -259,6 +259,19 @@ export const api = {
   pluginContextPreview: () => invoke<string>("plugin_context_preview"),
   slashCommands: () => invoke<SlashCommand[]>("slash_commands"),
   slashExpand: (name: string, args: string) => invoke<string>("slash_expand", { name, args }),
+  promptsList: () => invoke<Prompt[]>("prompts_list"),
+  promptCollections: () => invoke<PromptCollection[]>("prompt_collections"),
+  promptsInspect: (spec: string) => invoke<PluginOffer>("prompts_inspect", { spec }),
+  promptsInstall: (spec: string, names: string[]) => invoke<string[]>("prompts_install", { spec, names }),
+  promptCollectionSet: (id: string, p: { enabled?: boolean; autoUpdate?: boolean }) =>
+    invoke<void>("prompt_collection_set", { id, enabled: p.enabled ?? null, autoUpdate: p.autoUpdate ?? null }),
+  promptCollectionUpdate: (id: string) => invoke<boolean | null>("prompt_collection_update", { id }),
+  promptCollectionRollback: (id: string) => invoke<void>("prompt_collection_rollback", { id }),
+  promptCollectionRemove: (id: string) => invoke<void>("prompt_collection_remove", { id }),
+  promptsUpdateAll: () => invoke<string[]>("prompts_update_all"),
+  promptSave: (name: string | null, draft: { title: string; description: string; tags: string[]; body: string }) => invoke<Prompt>("prompt_save", { name, draft }),
+  promptDelete: (name: string) => invoke<void>("prompt_delete", { name }),
+  promptFavorite: (id: string, on: boolean) => invoke<void>("prompt_favorite", { id, on }),
 
   tasksList: () => invoke<Task[]>("tasks_list"),
   taskSave: (task: Task) => invoke<Task>("task_save", { task }),
@@ -324,7 +337,22 @@ export type PluginView = {
 };
 export type PluginOffer = { repo: string; marketplace: string | null; items: { name: string; description: string; source: PluginSource | null; note: string | null }[] };
 export type PluginCandidate = { key: string; name: string; origin: string; local: string; github: PluginSource | null; user_scope: boolean; imported: boolean };
-export type SlashCommand = { kind: "skill" | "command" | "agent"; name: string; plugin: string; description: string; arg_hint: string | null; path: string };
+export type SlashCommand = { kind: "skill" | "command" | "agent" | "prompt"; name: string; plugin: string; description: string; arg_hint: string | null; path: string };
+export type Prompt = {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  tags: string[];
+  arg_hint: string | null;
+  body: string;
+  collection: string;
+  collection_name: string;
+  path: string;
+  favorite: boolean;
+  editable: boolean;
+};
+export type PromptCollection = Omit<PluginView, "skills" | "commands" | "agents" | "hook_commands"> & { prompts: number };
 export type SyncStatus = { folder: string | null; device_name: string; last_at: number; devices: string[]; error: string | null };
 export type DeviceInventory = {
   sdk: { adb: string; emulator: string | null; avdmanager: string | null; root: string | null } | null;
