@@ -42,11 +42,10 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Release:** `desktop-v0.2.0` published 2026-10-24 (approved by Nik) at https://github.com/niko4244/openclaude/releases/tag/desktop-v0.2.0, tagged at `db86d09f`.
-  - The feed `releases/latest/download/latest.json` serves 0.2.0.
-  - The installer's signature verifies against the embedded pubkey (scratch check with Python `cryptography`; a tampered copy fails).
-  - Installed v0.1.0 apps update to it. On first launch, 0.2.0 seeds Ponytail and imports Nik's Claude plugins.
-  - There's no installed copy on the dev machine to watch the update live.
+- **Release:** `desktop-v0.3.0` published 2026-10-24 (approved by Nik), Latest, at https://github.com/niko4244/openclaude/releases/tag/desktop-v0.3.0.
+  - It was built from a clean worktree at `d5bc3652` (on G:) because another agent had uncommitted changes in this checkout (`mod evolution` in lib.rs, `evolution.rs`, `AGENTS.md`, `feature-intel/monitor.mjs`). Those changes are not in the release and were left untouched.
+  - The feed serves 0.3.0; the installer signature verifies and a tampered copy fails.
+  - Installed 0.1.0/0.2.0 apps update automatically (0.2.0 and later check every 4 h; 0.1.0 through About → Check for updates).
 - **Plugin system shipped:** commit `fca5dac4` (matrix row 26, tranche T10). Code is in `src-tauri/src/plugins.rs`.
   - Install from GitHub: marketplace.json or a plugin repo. Sparse shallow clones go to `<data>/plugins/repos/`.
   - Auto-update every 15 min. Rollback pins the plugin.
@@ -168,6 +167,19 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - `diagnostics.e2e` passes its Code-tab flow, but its `/openclaude/i` check on the checkout path fails for this worktree's name (`oc-code-extras`).
   - The gateway's local models were down this session (LiteLLM can't reach Ollama), so `desktop.e2e` wasn't re-run. Its step 13 selectors (`.nav-item.mono`, Terminal) are unchanged.
 - **Merge note:** the sibling branches (record-skill, prompt-library) also touch `lib.rs` command registration, `styles.css`, the matrix and this file. Expect small textual conflicts.
+
+## Evolution Engine (feature parity, 2026-10-24)
+- **What:** `desktop/feature-intel/` is now the OpenClaude Evolution Engine, not a one-off script.
+  - Durable `registry.json` (signals with provenance + classified features with parity/state) and `ledger.json` (implementation tasks).
+  - One sweep (`lib/engine.mjs`) shared by the CLI, the desktop ticker and CI; conditional requests, retries, per-source failure isolation, lock with stale takeover, atomic writes.
+  - REA (`lib/rea.mjs`) is a probe + plan writer. It never installs REA and records `blocked` when it is absent.
+  - Pipeline (`lib/pipeline.mjs`): spec, isolated worktree plan, ledger, allowlisted gates, PR draft. Guards: `guardInference` (no unauthorized paid calls), `assertIsolatedWorktree` (never the checkout).
+  - Roles in `desktop/feature-intel/agents/`; design in `docs/openclaude-evolution-engine.md`.
+- **App:** new **Evolution** page (`src/components/Evolution.tsx`, `src-tauri/src/evolution.rs`), sidebar entry, commands `evolution_status`, `evolution_check`, `evolution_configure`, plus a 15-minute ticker that only runs a sweep when one is due.
+- **CI:** `.github/workflows/claude-feature-watch.yml` runs every 6 h, commits the registry to `evolution/registry` and opens/updates a PR. It never pushes to `main` and never runs third-party code.
+- **Commands:** `bun run evolution` (CLI), `bun run evolution:check`, `bun run test:evolution`; in the app, Evolution → Check for Claude updates / Pause.
+- **Verified 2026-10-24:** engine tests 33/33, Rust lib 127 passed (5 new `evolution::` tests), `tsc -b` 0, `vite build` ok, eslint 0 errors. Live sweep: 141 signals from 8 sources, second run +0 (idempotent). Three real signals classified as `partial` with matrix-based notes; `docs/feature-parity.md` generated. REA is not installed on this machine, so `investigate` correctly returned **blocked** (exit 2). A temp-copy end-to-end run produced a ledger task, executed a real gate, and wrote a PR draft with the gate result (`ready-for-review`).
+- **Not verified:** the Evolution page was not launched in the running app (no Tauri build this session); the desktop ticker was not observed firing (it needs 15 min plus a due registry). Neither is claimed as live-tested.
 
 ## Next steps (in order)
 1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.
