@@ -44,9 +44,23 @@ is implemented against OpenClaude's own storage, prompting and approval machiner
   a provider is added, the app restarts so the model catalog and default model are the real startup
   path, a bot is created from the form, its chat opens, the stub captures the request and asserts the
   persona, memory and folder are in the system prompt and the bot's model is requested; reopening
-  resumes the same thread; editing the memory changes the next request; deleting the bot keeps the
-  chat and returns the empty roster.
+  resumes the same thread; editing the memory changes the next request; deleting the bot keeps
+  the chat and returns the empty roster.
 - `tsc -b` 0, eslint 0 errors.
+- Real model (`e2e/bots-real.e2e.mjs`, **9/9**, Ollama `qwen2.5vl:7b` on loopback, no network): a
+  plain chat and a bot were asked the identical question on the same model. The plain chat said it
+  could not determine the project or the release day; the bot, whose persona is a laconic lighthouse
+  keeper and whose memory names the project, the weekday and the team size, replied *"I am Kestrel,
+  the lighthouse keeper's assistant."*, then *"Your project is called Tallow, and you release it on
+  Thursdays."*, then *"Your team has three engineers."* A fresh plain chat afterwards still did not
+  know the project, so the knowledge lives in that bot's thread rather than in the app. Cold start
+  was 105 s (model load); warm turns took 0.7–13.5 s.
+
+  What this shows, precisely: the persona produced the name and the terse, no-exclamation style, and
+  the memory produced facts the same model could not answer without it. It is an influence, not a
+  guarantee — the model described itself as the keeper's *assistant* rather than the keeper. The run
+  is manual because it needs a local Ollama; run
+  `node e2e/bots-real.e2e.mjs` (optionally `BOT_E2E_MODEL=llama3.2:3b`) and it prints every reply.
 
 ## REA note
 
