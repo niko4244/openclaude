@@ -21,6 +21,8 @@ pub enum CodeEvent {
     /// Answer with `CodeSessions::respond`.
     Approval { request_id: String, tool: String, input: Value },
     Stderr { line: String },
+    /// A problem the user can act on (e.g. the CLI is missing on an SSH host), in plain words.
+    Error { message: String },
     Exited { code: Option<i32> },
 }
 
@@ -170,8 +172,20 @@ impl CodeSessions {
         if !PERMISSION_MODES.contains(&a.permission_mode) {
             anyhow::bail!("unknown permission mode");
         }
-        let mut child = build_command(&a).spawn().map_err(|e| anyhow::anyhow!("failed to start node: {e}"))?;
-        let stdin = child.stdin.take().unwrap();
+        self.start_with(id, build_command(&a), None, None, ch).await
+    }
+
+    /// Run an agent command speaking stream-json on stdio. `first_line` is written to stdin before
+    /// anything else (the SSH wrapper reads the API key from it); `ssh_host` turns known ssh/remote
+    /// failures on stderr into `CodeEvent::Error` hints.
+    pub async fn start_with(&self, id: String, mut cmd: Command, first_line: Option<String>, ssh_host: Option<String>, ch: Channel<CodeEvent>) -> anyhow::Result<()> {
+        let what = if ssh_host.is_some() { "ssh" } else { "node" };
+        let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!("failed to start {what}: {e}"))?;
+        let mut stdin = child.stdin.take().unwrap();
+        if let Some(l) = first_line {
+            stdin.write_all(l.as_bytes()).await?;
+            stdin.flush().await?;
+        }
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let session = Arc::new(CodeSession { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: Mutex::new(HashMap::new()) });
@@ -181,7 +195,14 @@ impl CodeSessions {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = ch2.send(CodeEvent::Stderr { line });
+                match ssh_host.as_deref().and_then(|h| ssh_error_hint(&line, h)) {
+                    Some(message) => {
+                        let _ = ch2.send(CodeEvent::Error { message });
+                    }
+                    None => {
+                        let _ = ch2.send(CodeEvent::Stderr { line });
+                    }
+                }
             }
         });
         tokio::spawn(async move {
@@ -381,35 +402,48 @@ async fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// `git status --porcelain=v1 -b` output.
+fn parse_status(s: &str) -> GitStatus {
+    let mut st = GitStatus { is_repo: true, ..Default::default() };
+    for line in s.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(b) = line.strip_prefix("## ") {
+            st.branch = Some(b.split("...").next().unwrap_or(b).to_string());
+        } else if line.len() > 3 {
+            st.files.push((line[..2].trim().to_string(), line[3..].to_string()));
+        }
+    }
+    st
+}
+
 /// Read-only: branch + porcelain status.
 pub async fn git_status(cwd: &Path) -> GitStatus {
     match git(cwd, &["status", "--porcelain=v1", "-b"]).await {
         Err(e) => GitStatus { error: Some(e.to_string()), ..Default::default() },
-        Ok(s) => {
-            let mut st = GitStatus { is_repo: true, ..Default::default() };
-            for line in s.lines() {
-                if let Some(b) = line.strip_prefix("## ") {
-                    st.branch = Some(b.split("...").next().unwrap_or(b).to_string());
-                } else if line.len() > 3 {
-                    st.files.push((line[..2].trim().to_string(), line[3..].to_string()));
-                }
-            }
-            st
-        }
+        Ok(s) => parse_status(&s),
     }
+}
+
+/// A repo-relative path for `git diff`: never an option, absolute, or escaping the repo.
+fn check_diff_path(p: &str) -> anyhow::Result<()> {
+    if p.starts_with('-') || p.starts_with('/') || Path::new(p).is_absolute() || p.contains("..") || p.chars().any(char::is_control) {
+        anyhow::bail!("invalid path");
+    }
+    Ok(())
+}
+
+fn cap_diff(d: String) -> String {
+    if d.len() > 400_000 { format!("{}\n…[diff truncated]", &d[..d.floor_char_boundary(400_000)]) } else { d }
 }
 
 /// Read-only unified diff for one path (or the whole tree when `path` is None).
 pub async fn git_diff(cwd: &Path, path: Option<&str>) -> anyhow::Result<String> {
     let mut args = vec!["diff", "--no-color", "HEAD", "--"];
     if let Some(p) = path {
-        if p.starts_with('-') || Path::new(p).is_absolute() || p.contains("..") {
-            anyhow::bail!("invalid path");
-        }
+        check_diff_path(p)?;
         args.push(p);
     }
-    let d = git(cwd, &args).await?;
-    Ok(if d.len() > 400_000 { format!("{}\n…[diff truncated]", &d[..d.floor_char_boundary(400_000)]) } else { d })
+    Ok(cap_diff(git(cwd, &args).await?))
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -538,9 +572,390 @@ pub fn detect_dev_url(line: &str) -> Option<String> {
     None
 }
 
+// ---------- remote coding over SSH (the system OpenSSH client) ----------
+//
+// The CLI runs on the remote host and speaks the same stream-json protocol over the SSH session.
+// A loopback model gateway is reached through a reverse tunnel (-R), so only the encrypted SSH
+// session leaves this machine. The API key travels as the first stdin line and is read by a
+// shell builtin, so it never appears on a command line on either side. Remote hosts need a
+// POSIX login shell (bash/zsh/sh), Node.js 20+ and the OpenClaude CLI.
+
+pub const REMOTE_INSTALL: &str = "npm install -g @gitlawb/openclaude";
+const CLI_MISSING: &str = "OPENCLAUDE_REMOTE_CLI_MISSING";
+const NO_DIR: &str = "OPENCLAUDE_REMOTE_NO_DIR";
+const REMOTE_OK: &str = "OPENCLAUDE_REMOTE_OK";
+
+/// The system OpenSSH client (Windows ships one in System32\OpenSSH).
+pub fn ssh_exe() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let p = PathBuf::from(root).join(r"System32\OpenSSH\ssh.exe");
+        if p.is_file() {
+            return p;
+        }
+    }
+    PathBuf::from("ssh")
+}
+
+/// `[user@]host` (an alias from ~/.ssh/config, a hostname or an IP). Never something ssh could read as an option.
+pub fn valid_ssh_host(h: &str) -> bool {
+    let word = |s: &str, extra: &str| !s.is_empty() && s.len() <= 255 && !s.starts_with('-') && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    match h.split_once('@') {
+        Some((user, host)) => word(user, "._-") && word(host, "._-:"),
+        None => word(h, "._-:"),
+    }
+}
+
+/// An absolute remote folder, or one under the remote home (`~`, `~/…`).
+pub fn valid_remote_dir(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 1024 && !p.chars().any(char::is_control) && (p.starts_with('/') || p == "~" || p.starts_with("~/"))
+}
+
+/// `Host` aliases from an ssh config (wildcard and negated patterns are skipped).
+pub fn parse_ssh_hosts(config: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for line in config.lines() {
+        let l = line.trim();
+        let Some((kw, rest)) = l.split_once(|c: char| c.is_whitespace() || c == '=') else { continue };
+        if !kw.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        for h in rest.trim_start_matches(|c: char| c.is_whitespace() || c == '=').split_whitespace() {
+            let h = h.trim_matches('"');
+            if !h.contains(['*', '?', '!']) && valid_ssh_host(h) && !out.iter().any(|x| x == h) {
+                out.push(h.to_string());
+            }
+        }
+    }
+    out
+}
+
+pub fn ssh_hosts() -> Vec<String> {
+    dirs::home_dir().and_then(|h| std::fs::read_to_string(h.join(".ssh").join("config")).ok()).map(|c| parse_ssh_hosts(&c)).unwrap_or_default()
+}
+
+/// One POSIX shell word.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// A remote folder as a shell word; a leading `~/` stays relative to $HOME.
+fn sh_dir(p: &str) -> String {
+    match p.strip_prefix("~/") {
+        Some(rest) => format!("\"$HOME\"/{}", sh_quote(rest)),
+        None if p == "~" => "\"$HOME\"".into(),
+        None => sh_quote(p),
+    }
+}
+
+/// Enter the folder, and when `openclaude` isn't on the non-interactive PATH, load the login
+/// profile and nvm the way an interactive shell would (stdin closed so they can't eat the key line).
+fn remote_prelude(dir: &str) -> String {
+    format!(
+        "cd -- {} 2>/dev/null || {{ echo {NO_DIR} >&2; exit 2; }}; \
+         command -v openclaude >/dev/null 2>&1 || for f in \"$HOME/.profile\" \"$HOME/.nvm/nvm.sh\"; do [ -r \"$f\" ] && . \"$f\" >/dev/null 2>&1 </dev/null; done; ",
+        sh_dir(dir)
+    )
+}
+
+fn ssh_base(c: &mut Command) {
+    c.args(["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30"]);
+    #[cfg(windows)]
+    c.creation_flags(0x0800_0000);
+}
+
+/// Where the remote CLI reaches the model API. A loopback base (the local gateway) is
+/// reverse-tunnelled: returns the `-R` spec and the base URL as seen on the remote.
+pub fn tunnel_for(openai_base: &str, remote_port: u16) -> anyhow::Result<(Option<String>, String)> {
+    let mut u = url::Url::parse(openai_base.trim_end_matches('/'))?;
+    let target = match u.host() {
+        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => "localhost",
+        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => "127.0.0.1",
+        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => "localhost",
+        _ => return Ok((None, u.as_str().trim_end_matches('/').to_string())),
+    };
+    let port = u.port_or_known_default().ok_or_else(|| anyhow::anyhow!("gateway URL has no port"))?;
+    if u.scheme() == "http" {
+        u.set_host(Some("127.0.0.1"))?; // the tunnel listens on IPv4 loopback only
+    }
+    u.set_port(Some(remote_port)).map_err(|_| anyhow::anyhow!("bad gateway URL"))?;
+    Ok((Some(format!("127.0.0.1:{remote_port}:{target}:{port}")), u.as_str().trim_end_matches('/').to_string()))
+}
+
+pub struct RemoteArgs<'a> {
+    pub host: &'a str,
+    pub dir: &'a str,
+    pub model: &'a str,
+    pub permission_mode: &'a str,
+    pub openai_base: &'a str,
+    /// Remote loopback port the gateway is forwarded to.
+    pub remote_port: u16,
+}
+
+/// `ssh -T … -R <tunnel> -- host '<script>'` running the CLI in stream-json mode on the remote.
+/// The caller writes the API key (or an empty line) as the first stdin line.
+pub fn build_ssh_command(a: &RemoteArgs) -> anyhow::Result<Command> {
+    if !valid_ssh_host(a.host) {
+        anyhow::bail!("invalid SSH host");
+    }
+    if !valid_remote_dir(a.dir) {
+        anyhow::bail!("remote folder must be absolute or start with ~/");
+    }
+    if !PERMISSION_MODES.contains(&a.permission_mode) {
+        anyhow::bail!("unknown permission mode");
+    }
+    if a.model.is_empty() || a.model.len() > 200 || a.model.chars().any(char::is_control) {
+        anyhow::bail!("invalid model name");
+    }
+    let (forward, base) = tunnel_for(a.openai_base, a.remote_port)?;
+    let mut script = remote_prelude(a.dir);
+    script += &format!("command -v openclaude >/dev/null 2>&1 || {{ echo {CLI_MISSING} >&2; exit 127; }}; ");
+    script += "IFS= read -r OPENAI_API_KEY; if [ -n \"$OPENAI_API_KEY\" ]; then export OPENAI_API_KEY; else unset OPENAI_API_KEY; fi; ";
+    script += &format!(
+        "export CLAUDE_CODE_USE_OPENAI=1 OPENAI_BASE_URL={} OPENAI_MODEL={m}; exec openclaude --print --verbose --input-format stream-json --output-format stream-json --provider openai --model {m} --permission-mode {}",
+        sh_quote(&base),
+        sh_quote(a.permission_mode),
+        m = sh_quote(a.model),
+    );
+    if asks_for_approval(a.permission_mode) {
+        script += " --permission-prompt-tool stdio";
+    }
+    let mut c = Command::new(ssh_exe());
+    ssh_base(&mut c);
+    if let Some(f) = forward {
+        c.args(["-o", "ExitOnForwardFailure=yes", "-R", &f]);
+    }
+    c.args(["--", a.host, &script])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    Ok(c)
+}
+
+/// Plain-words hint for a known ssh or remote-setup failure on stderr.
+pub fn ssh_error_hint(line: &str, host: &str) -> Option<String> {
+    let l = line.trim();
+    Some(if l.contains(CLI_MISSING) {
+        format!("The OpenClaude CLI isn't installed on {host}. Install it there (needs Node.js 20+): {REMOTE_INSTALL}")
+    } else if l.contains(NO_DIR) {
+        format!("That folder doesn't exist on {host}.")
+    } else if l.contains("Host key verification failed") {
+        format!("{host}'s host key isn't trusted yet. Run `ssh {host}` once in a terminal and accept it, then try again.")
+    } else if l.contains("Permission denied (") {
+        format!("SSH sign-in to {host} failed. OpenClaude uses your SSH keys or ssh-agent and never asks for a password: check that `ssh {host}` works without one.")
+    } else if l.contains("remote port forwarding failed") {
+        format!("{host} refused the tunnel to your model gateway. Allow TCP forwarding on its SSH server (AllowTcpForwarding yes), or try again.")
+    } else if ["Could not resolve hostname", "Connection refused", "Connection timed out", "No route to host", "Network is unreachable"].iter().any(|p| l.contains(p)) {
+        format!("Couldn't reach {host}: {l}")
+    } else {
+        return None;
+    })
+}
+
+/// Run a read-only script on the host; stdout, or the hint / stderr on failure.
+async fn ssh_run(host: &str, script: &str) -> anyhow::Result<String> {
+    if !valid_ssh_host(host) {
+        anyhow::bail!("invalid SSH host");
+    }
+    let mut c = Command::new(ssh_exe());
+    ssh_base(&mut c);
+    c.args(["--", host, script]).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(40), c.output()).await.map_err(|_| anyhow::anyhow!("{host} did not answer within 40 s"))??;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let hint = err.lines().find_map(|l| ssh_error_hint(l, host));
+        anyhow::bail!("{}", hint.unwrap_or_else(|| err.trim().chars().take(400).collect()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[derive(Serialize, Default, Debug, PartialEq)]
+pub struct RemoteCheck {
+    pub ok: bool,
+    pub node: Option<String>,
+    pub cli: Option<String>,
+    pub git: bool,
+    pub error: Option<String>,
+    /// Install command to show when the CLI is missing.
+    pub install: Option<String>,
+}
+
+pub fn parse_remote_check(out: &str) -> RemoteCheck {
+    let mut r = RemoteCheck::default();
+    for l in out.lines().map(|l| l.trim_end_matches('\r')) {
+        if let Some(v) = l.strip_prefix("node=").filter(|v| !v.is_empty()) {
+            r.node = Some(v.to_string());
+        } else if let Some(v) = l.strip_prefix("cli=").filter(|v| !v.is_empty()) {
+            r.cli = Some(v.to_string());
+        } else if l == "git=yes" {
+            r.git = true;
+        } else if l == REMOTE_OK {
+            r.ok = true;
+        }
+    }
+    if r.ok && r.cli.is_none() {
+        r.ok = false;
+        r.error = Some(format!("The OpenClaude CLI isn't installed on this host{}.", if r.node.is_none() { " (Node.js 20+ is missing too)" } else { "" }));
+        r.install = Some(REMOTE_INSTALL.into());
+    }
+    r
+}
+
+/// Can the agent run there? Connects, enters the folder, and looks for Node, the CLI and git.
+pub async fn remote_check(host: &str, dir: &str) -> RemoteCheck {
+    if !valid_remote_dir(dir) {
+        return RemoteCheck { error: Some("remote folder must be absolute or start with ~/".into()), ..Default::default() };
+    }
+    let script = format!(
+        "{}echo \"node=$(node --version 2>/dev/null)\"; echo \"cli=$(command -v openclaude 2>/dev/null)\"; \
+         git rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo git=yes; echo {REMOTE_OK}",
+        remote_prelude(dir)
+    );
+    match ssh_run(host, &script).await {
+        Ok(out) => parse_remote_check(&out),
+        Err(e) => RemoteCheck { error: Some(e.to_string()), ..Default::default() },
+    }
+}
+
+pub async fn remote_git_status(host: &str, dir: &str) -> GitStatus {
+    if !valid_remote_dir(dir) {
+        return GitStatus { error: Some("invalid remote folder".into()), ..Default::default() };
+    }
+    match ssh_run(host, &format!("cd -- {} && git status --porcelain=v1 -b", sh_dir(dir))).await {
+        Err(e) => GitStatus { error: Some(e.to_string()), ..Default::default() },
+        Ok(s) => parse_status(&s),
+    }
+}
+
+pub async fn remote_git_diff(host: &str, dir: &str, path: Option<&str>) -> anyhow::Result<String> {
+    if !valid_remote_dir(dir) {
+        anyhow::bail!("invalid remote folder");
+    }
+    let mut script = format!("cd -- {} && git diff --no-color HEAD --", sh_dir(dir));
+    if let Some(p) = path {
+        check_diff_path(p)?;
+        script += &format!(" {}", sh_quote(p));
+    }
+    Ok(cap_diff(ssh_run(host, &script).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args_of(c: &Command) -> Vec<String> {
+        c.as_std().get_args().map(|s| s.to_string_lossy().into()).collect()
+    }
+
+    fn remote(base: &str, mode: &str) -> RemoteArgs<'static> {
+        RemoteArgs { host: "dev@box.lan", dir: "~/src/it's here", model: "coder-local", permission_mode: if mode == "acceptEdits" { "acceptEdits" } else { "plan" }, openai_base: if base.is_empty() { "http://127.0.0.1:4000/v1/" } else { "https://api.example.com/v1" }, remote_port: 43123 }
+    }
+
+    #[test]
+    fn ssh_command_tunnels_the_gateway_and_keeps_the_key_off_the_command_line() {
+        let c = build_ssh_command(&remote("", "acceptEdits")).unwrap();
+        let args = args_of(&c);
+        assert!(c.as_std().get_program().to_string_lossy().to_lowercase().contains("ssh"));
+        for want in [["-T"].as_slice(), &["-o", "BatchMode=yes"], &["-o", "ExitOnForwardFailure=yes"], &["-R", "127.0.0.1:43123:127.0.0.1:4000"]] {
+            assert!(args.windows(want.len()).any(|w| w == want), "{want:?} in {args:?}");
+        }
+        // destination comes right after `--`, the script is the last argument
+        let dd = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(args[dd + 1], "dev@box.lan");
+        assert_eq!(args.len(), dd + 3);
+        let script = &args[dd + 2];
+        assert!(script.contains("OPENAI_BASE_URL='http://127.0.0.1:43123/v1'"), "{script}");
+        assert!(script.contains("--permission-prompt-tool stdio") && script.contains("--permission-mode 'acceptEdits'"));
+        assert!(script.contains("IFS= read -r OPENAI_API_KEY"), "key is read from stdin");
+        assert!(!args.iter().any(|a| a.contains("sk-") || a.contains("OPENAI_API_KEY=")), "no key on any command line");
+        assert!(!script.contains("dangerously"));
+        assert!(script.contains(r#"cd -- "$HOME"/'src/it'\''s here'"#), "{script}");
+        assert!(script.contains(CLI_MISSING));
+        assert!(c.as_std().get_envs().next().is_none(), "nothing secret in the local ssh environment either");
+        // no prompt tool in read-only plan mode
+        let plan = args_of(&build_ssh_command(&remote("", "plan")).unwrap());
+        assert!(!plan.last().unwrap().contains("--permission-prompt-tool"));
+    }
+
+    #[test]
+    fn ssh_command_without_local_gateway_has_no_tunnel() {
+        let args = args_of(&build_ssh_command(&remote("remote", "plan")).unwrap());
+        assert!(!args.iter().any(|a| a == "-R"));
+        assert!(args.last().unwrap().contains("OPENAI_BASE_URL='https://api.example.com/v1'"));
+    }
+
+    #[test]
+    fn ssh_command_rejects_option_injection_and_bad_input() {
+        let ok = remote("", "plan");
+        for host in ["-oProxyCommand=calc", "", "a b", "user@-x", "h;rm", "h'q", "@h", "u@"] {
+            assert!(build_ssh_command(&RemoteArgs { host, ..remote("", "plan") }).is_err(), "{host:?}");
+        }
+        for dir in ["relative/dir", "", "~other/x", "/a\nb", "C:\\x"] {
+            assert!(build_ssh_command(&RemoteArgs { dir, ..remote("", "plan") }).is_err(), "{dir:?}");
+        }
+        assert!(build_ssh_command(&RemoteArgs { permission_mode: "yolo", ..remote("", "plan") }).is_err());
+        assert!(build_ssh_command(&RemoteArgs { model: "m\nx", ..remote("", "plan") }).is_err());
+        assert!(build_ssh_command(&ok).is_ok());
+        for host in ["devbox", "nik@10.0.0.5", "build-01.example.com", "u_1@h.local", "fe80::1"] {
+            assert!(valid_ssh_host(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn tunnel_rewrites_only_loopback_gateways() {
+        assert_eq!(tunnel_for("http://localhost:4000/v1", 5000).unwrap(), (Some("127.0.0.1:5000:localhost:4000".into()), "http://127.0.0.1:5000/v1".into()));
+        assert_eq!(tunnel_for("http://127.0.0.1:11434/v1/", 5001).unwrap(), (Some("127.0.0.1:5001:127.0.0.1:11434".into()), "http://127.0.0.1:5001/v1".into()));
+        assert_eq!(tunnel_for("https://localhost/v1", 5002).unwrap(), (Some("127.0.0.1:5002:localhost:443".into()), "https://localhost:5002/v1".into()));
+        assert_eq!(tunnel_for("https://openrouter.ai/api/v1", 5003).unwrap(), (None, "https://openrouter.ai/api/v1".into()));
+        assert!(tunnel_for("not a url", 1).is_err());
+    }
+
+    #[test]
+    fn shell_quoting_is_posix_safe() {
+        assert_eq!(sh_quote("plain"), "'plain'");
+        assert_eq!(sh_quote("it's"), r"'it'\''s'");
+        assert_eq!(sh_quote("$(rm -rf ~) `x` \"y\""), "'$(rm -rf ~) `x` \"y\"'");
+        assert_eq!(sh_dir("~"), "\"$HOME\"");
+        assert_eq!(sh_dir("/srv/app"), "'/srv/app'");
+        assert_eq!(sh_dir("~/a b"), "\"$HOME\"/'a b'");
+    }
+
+    #[test]
+    fn ssh_config_hosts() {
+        let cfg = "Host devbox\n  HostName 10.0.0.5\n  User nik\nHost *.corp !bad gpu1 gpu2\nhost=pi\nHost \"quoted\"\nMatch host x\nHost -oProxyCommand=evil\nHost devbox\n";
+        assert_eq!(parse_ssh_hosts(cfg), ["devbox", "gpu1", "gpu2", "pi", "quoted"]);
+        assert!(parse_ssh_hosts("").is_empty());
+    }
+
+    #[test]
+    fn remote_check_parsing_and_hints() {
+        let ok = parse_remote_check("node=v22.3.0\ncli=/home/nik/.npm-global/bin/openclaude\ngit=yes\nOPENCLAUDE_REMOTE_OK\n");
+        assert_eq!(ok, RemoteCheck { ok: true, node: Some("v22.3.0".into()), cli: Some("/home/nik/.npm-global/bin/openclaude".into()), git: true, error: None, install: None });
+        let missing = parse_remote_check("node=\ncli=\nOPENCLAUDE_REMOTE_OK\n");
+        assert!(!missing.ok && missing.install.as_deref() == Some(REMOTE_INSTALL));
+        assert!(missing.error.unwrap().contains("Node.js"));
+        assert!(!parse_remote_check("garbage").ok, "no sentinel, not ok");
+        let h = |l: &str| ssh_error_hint(l, "devbox");
+        assert!(h(CLI_MISSING).unwrap().contains(REMOTE_INSTALL));
+        assert!(h("Host key verification failed.").unwrap().contains("ssh devbox"));
+        assert!(h("nik@devbox: Permission denied (publickey).").unwrap().contains("ssh-agent"));
+        assert!(h("Error: remote port forwarding failed for listen port 43123").unwrap().contains("AllowTcpForwarding"));
+        assert!(h("ssh: Could not resolve hostname devbox: No such host is known.").unwrap().starts_with("Couldn't reach devbox"));
+        assert!(h(NO_DIR).is_some());
+        assert_eq!(h("Warning: Permanently added 'devbox' to the list of known hosts."), None);
+    }
+
+    #[test]
+    fn git_status_parsing_tolerates_crlf() {
+        let st = parse_status("## main...origin/main [ahead 1]\r\n M src/a.rs\r\n?? new.txt\r\n");
+        assert_eq!(st.branch.as_deref(), Some("main"));
+        assert_eq!(st.files, [("M".to_string(), "src/a.rs".to_string()), ("??".to_string(), "new.txt".to_string())]);
+        for bad in ["-x", "/etc/passwd", "../up", "a/../../b", "C:\\x", "a\nb"] {
+            assert!(check_diff_path(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_diff_path("src/main.rs").is_ok());
+    }
 
     /// Real CLI in a temp repo: the edit is allowed, the shell command is denied (background rules).
     #[tokio::test]
