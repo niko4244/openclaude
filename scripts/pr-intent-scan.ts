@@ -320,8 +320,10 @@ function findCommandFindings(line: DiffLine): Finding[] {
       'Added remote download followed by execution or staging',
     ],
     [
+      // The payload has to be inline. A variable (${enc}) is how a benchmark or a
+      // wrapper passes a benign script; flagging the flag alone buried real payloads.
       'powershell-encoded',
-      /\bpowershell(?:\.exe)?\b.*(?:-enc|-encodedcommand)\b/i,
+      /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b(?:\s*["'])?\s*[A-Za-z0-9+/]{16,}={0,2}/i,
       'Added encoded PowerShell invocation',
     ],
     [

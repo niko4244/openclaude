@@ -68,6 +68,22 @@ describe('scanAddedLines', () => {
     expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(true)
   })
 
+  test('flags a quoted inline encoded powershell payload', () => {
+    const findings = scanAddedLines([
+      line('powershell -NoProfile -EncodedCommand "SQBFAFgAIABIAGkA"'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(true)
+  })
+
+  test('does not flag a variable passed to -EncodedCommand', () => {
+    const findings = scanAddedLines([
+      line('execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${enc}`)'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(false)
+  })
+
   test('flags long encoded blobs', () => {
     const findings = scanAddedLines([
       line(`const payload = "${'A'.repeat(96)}"`),
