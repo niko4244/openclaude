@@ -61,6 +61,12 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Layout geometry is measured from the reference bundle's CSS tokens (`resources/ion-dist`) and adopted: 768 px column, 18 px composer radius, 8 px base radius, 15 px / 1.4667 chat text.
   - Sync (`src-tauri/src/sync.rs`, Settings → General → Sync across devices; env `OPENCLAUDE_SYNC_DIR` for tests): e2e/sync.e2e.mjs 6/6.
   - Gate: desktop 38/38, a11y 0, Rust 82.
+- **Title row (after `c6d44e17`):**
+  - The separate 36 px title bar is gone. The sidebar runs to the top, with the wordmark, app menu and collapse in a 48 px draggable header row (`data-tauri-drag-region="deep"`).
+  - Window controls (`WindowControls` in TitleBar.tsx) float over the top-right; rows under them reserve `--wc-inset`.
+  - This matches the reference shell rendered from `resources/ion-dist` (VISUAL_BASELINES §1c).
+  - The quick-entry and voice E2E checks now verify the feature, not the model's exact word.
+  - Gate: desktop 38/38, a11y 0, artifacts 4/4.
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 

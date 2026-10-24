@@ -1,6 +1,6 @@
 # Visual Baselines: placeholder & capture plan
 
-Status: **layout geometry measured; no reference screenshots stored.** The landmarks below come from static assets
+Status: **layout geometry and shell landmarks measured against the reference; no reference images stored in the repo.** The landmarks below come from static assets
 and window options in the pristine 3.6556.2 archive (`REA_EVIDENCE.md` E-25, E-06) and, since 2026-10-23, from the layout
 tokens in the installed app's bundled web UI (§1b). Values are facts about geometry, not copied assets.
 
@@ -33,6 +33,25 @@ an error boundary even with a mocked bootstrap). Only geometry is adopted; palet
 | `--cds-font-size-body` | 14 px | 14 px | 14 px |
 | `--cds-font-size-title` | 20–22 px | n/a | unchanged |
 | `--session-rail-w` (Code session rail) | 280 px | n/a | not adopted |
+
+## 1c. Shell side by side (measured 2026-10-23)
+
+The reference shell was rendered from the installed bundle (`resources/ion-dist`) in an isolated headless Chromium at
+1200x800 with every non-loopback request blocked, nothing sent anywhere, and a minimal mocked bootstrap. Its DOM boxes were
+measured, and OpenClaude was measured from `e2e/out/01-home.png` and `05-tool-result.png`. The rendering is kept outside
+the repo for comparison only. The bundle's chat surface stays behind its server-side permission gating, so the chat
+column was compared by tokens (§1b), not pixels.
+
+| Landmark | Reference | OpenClaude (now) | Notes |
+|---|---|---|---|
+| Sidebar | x 0, full height, 288 px | x 0, full height, 288 px | Matches. Previously a 36 px app title bar sat above it |
+| Title row | 48 px; sidebar header (wordmark at y≈24) shares it; overlay window controls top-right | 48 px; wordmark at y≈24; own min/max/close float top-right; `--wc-inset` keeps rows clear | Matches |
+| Header icons | 32x32, radius 8, right edge inset ≈ 9 px | Menu + collapse, about 32 px, same row | Reference has collapse + search; ours collapse + app menu (search is a nav row) |
+| First nav row | "New", center y≈68 | "New chat", center y≈68 | Matches |
+| Nav rows | 32 px, 8 px side inset | 32 px (+1 px gap), 8 px side inset | Matches |
+| Footer rows | 32 px, 8 px inset | Account row (avatar, name, gateway status) | Content differs by design (gateway status instead of account plan) |
+| Main background vs sidebar | sidebar ≈ #fafaf9, main ≈ #fcfcfb (light) | Own palette, same relationship (sidebar a step darker than main) | Palette intentionally original |
+| Chat title | Centered in the title row | Centered in the title row | Matches |
 
 ## 2. Landmarks to baseline (per screen)
 1. Shell: title row, window controls region, sidebar (collapsed/expanded), main content, composer.

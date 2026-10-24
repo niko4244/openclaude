@@ -148,7 +148,9 @@ try {
   await sendMessage(page, "Reply with exactly one word: spoken");
   await waitIdle(page);
   const spoken = await page.waitForFunction(() => window.__spoken.length > 0 && window.__spoken.join(" "), null, { timeout: 10000 }).then((h) => h.jsonValue(), () => "");
-  record("voice conversation reads replies aloud", /spoken/i.test(String(spoken)), JSON.stringify(String(spoken).slice(0, 60)));
+  const shownReply = (await lastAssistantText(page)).replace(/\s+/g, " ").trim();
+  const said = String(spoken).replace(/\s+/g, " ").trim();
+  record("voice conversation reads replies aloud", said.length > 0 && shownReply.length > 0 && (said.includes(shownReply.slice(0, 20)) || shownReply.includes(said.slice(0, 20))), JSON.stringify(said.slice(0, 60)));
   await page.click('[aria-label="Search and tools"]');
   await page.locator('.tool-row:has-text("Voice conversation") input').uncheck();
   await page.click('[aria-label="Search and tools"]');
@@ -324,7 +326,8 @@ try {
     await p2.waitForFunction((n) => document.querySelectorAll(".conv-item").length > n, before, { timeout: 20000 }).catch(() => {});
     await waitIdle(p2).catch(() => {});
     const r = await lastAssistantText(p2);
-    record("quick entry starts a chat in main window", /quick/i.test(r) && (await p2.locator(".conv-item").count()) > before, JSON.stringify(r.slice(0, 60)));
+    const asked = await p2.locator(".msg.user").last().innerText().catch(() => "");
+    record("quick entry starts a chat in main window", /exactly one word: quick/.test(asked) && r.length > 0 && (await p2.locator(".conv-item").count()) > before, JSON.stringify(r.slice(0, 60)));
   }
 
   // 12b. quick entry recents jump to an existing chat

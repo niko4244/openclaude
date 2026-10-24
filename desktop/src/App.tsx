@@ -15,7 +15,7 @@ import { FindBar, ShortcutsSheet } from "./components/FindBar";
 import { ChatsPage, ProjectKnowledge, ProjectsPage, SearchPalette, ago } from "./components/Pages";
 import { ToolsMenu } from "./components/ToolsMenu";
 import { TasksPage } from "./components/TasksPage";
-import { TitleBar } from "./components/TitleBar";
+import { WindowControls } from "./components/TitleBar";
 import { Logo } from "./components/Logo";
 import { extractArtifacts, type Artifact } from "./components/Markdown";
 
@@ -308,7 +308,7 @@ export default function App() {
 
   return (
     <div className="shell">
-    <TitleBar onMenu={(id) => menuRef.current(id)} />
+    <WindowControls />
     {/* While a dialog is open the page behind it is inert (not focusable, hidden from assistive tech). */}
     <div className="app" inert={searchOpen || sheetOpen || undefined} aria-hidden={searchOpen || sheetOpen || undefined}>
       <Sidebar
@@ -328,13 +328,15 @@ export default function App() {
         onSelectProject={(id) => { setActiveProject(id); setActiveId(null); go("chat"); }}
         onNavigate={go}
         onToggle={() => setCollapsed((c) => !c)}
+        onMenu={(id) => menuRef.current(id)}
         onSearch={() => setSearchOpen(true)}
       />
       <main className="main">
         {page === "chat" && activeId && <h1 className="sr-only">{active?.title || "Chat"}</h1>}
         {page === "code" && <h1 className="sr-only">Code workspace</h1>}
+        {!(page === "chat" && activeId) && page !== "code" && <div className="main-top" data-tauri-drag-region="deep" />}
         {page === "chat" && activeId && (
-          <div className="topbar chat-top">
+          <div className="topbar chat-top" data-tauri-drag-region="deep">
             <span className="spacer" />
             <div className="picker">
               <button className="title-btn" onClick={() => setTitleMenu((o) => !o)} aria-haspopup="menu" aria-expanded={titleMenu}>

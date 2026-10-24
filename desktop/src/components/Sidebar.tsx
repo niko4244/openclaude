@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import type { Conversation, GatewayStatus, Project } from "../api";
 import { Logo } from "./Logo";
+import { AppMenu } from "./TitleBar";
 
 export type Page = "chat" | "chats" | "projects" | "tasks" | "code" | "settings";
 
@@ -24,6 +25,7 @@ export function Sidebar({
   onSelectProject,
   onNavigate,
   onToggle,
+  onMenu,
   onSearch,
 }: {
   collapsed: boolean;
@@ -42,6 +44,7 @@ export function Sidebar({
   onSelectProject: (id: string | null) => void;
   onNavigate: (p: Page, tab?: string) => void;
   onToggle: () => void;
+  onMenu: (id: string) => void;
   onSearch: () => void;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -98,11 +101,14 @@ export function Sidebar({
 
   return (
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`} aria-label="Sidebar">
-      <div className="sidebar-head">
+      <div className="sidebar-head" data-tauri-drag-region="deep">
         {!collapsed && <span className="brand"><Logo size={20} /> OpenClaude</span>}
+        <span className="head-icons">
+        <AppMenu onMenu={onMenu} />
         <button className="icon-btn" onClick={onToggle} title={collapsed ? "Open sidebar (Ctrl+B)" : "Close sidebar (Ctrl+B)"} aria-label="Toggle sidebar">
           <PanelLeft size={17} strokeWidth={1.75} />
         </button>
+        </span>
       </div>
       <nav className="sidebar-nav">
         <button className="new-chat" onClick={onNew} title="New chat (Ctrl+N)" aria-label="New chat">

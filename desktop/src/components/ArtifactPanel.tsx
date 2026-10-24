@@ -105,7 +105,7 @@ export function ArtifactPanel({ artifact, versions = [], onSelect, onClose, onAs
 
   return (
     <section className="artifact-panel" aria-label="Artifact">
-      <div className="topbar" style={{ borderBottom: "1px solid var(--border)" }}>
+      <div className="topbar" data-tauri-drag-region="deep" style={{ borderBottom: "1px solid var(--border)" }}>
         <span className="title">{artifact.title}</span>
         {versions.length > 1 && (
           <select className="btn" aria-label="Artifact version" value={versions.indexOf(artifact) >= 0 ? versions.indexOf(artifact) : versions.length - 1}

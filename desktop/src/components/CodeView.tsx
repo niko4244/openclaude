@@ -163,7 +163,7 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
   return (
     <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div className="topbar" style={{ borderBottom: "1px solid var(--border)", flexWrap: "wrap", height: "auto", minHeight: 48, padding: "6px 12px" }}>
+        <div className="topbar" data-tauri-drag-region="deep" style={{ borderBottom: "1px solid var(--border)", flexWrap: "wrap", height: "auto", minHeight: 48, padding: "6px 12px" }}>
           <button className="btn" onClick={async () => { const p = await invoke<string | null>("pick_workspace"); if (p) { setCwd(p); setDiff(null); void refreshGit(p); } }}>
             📂 {cwd ? cwd.split(/[\\/]/).slice(-2).join("/") : "Open folder…"}
           </button>
@@ -228,7 +228,7 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
         </div>
       </div>
       <aside className="artifact-panel" style={{ width: 360, minWidth: 300 }} aria-label="Repository">
-        <div className="topbar" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="topbar" data-tauri-drag-region="deep" style={{ borderBottom: "1px solid var(--border)" }}>
           <span className="title">{git?.is_repo ? `⎇ ${git.branch}` : "No git repository"}</span>
           <span className="spacer" />
           <button className="btn" onClick={async () => cwd && setDiff({ path: null, text: await invoke<string>("git_diff", { cwd, path: null }) })} disabled={!git?.is_repo}>Full diff</button>

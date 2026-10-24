@@ -22,19 +22,10 @@ const ITEMS: Item[] = [
   { id: "quit", label: "Quit OpenClaude" },
 ];
 
-/** Frameless window chrome: drag region, app menu, and window controls. */
-export function TitleBar({ onMenu }: { onMenu: (id: string) => void }) {
-  const win = getCurrentWindow();
-  const [maxed, setMaxed] = useState(false);
+/** The application menu (☰), shown in the sidebar header's title row. */
+export function AppMenu({ onMenu }: { onMenu: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const sync = () => void win.isMaximized().then(setMaxed);
-    sync();
-    const un = win.onResized(sync);
-    return () => void un.then((f) => f());
-  }, [win]);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -49,18 +40,34 @@ export function TitleBar({ onMenu }: { onMenu: (id: string) => void }) {
   };
 
   return (
-    <div className="titlebar" data-tauri-drag-region onDoubleClick={(e) => { if (e.target === e.currentTarget) void win.toggleMaximize(); }}>
-      <div className="picker" ref={ref}>
-        <button className="tb-btn" aria-label="Application menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}><Menu size={15} /></button>
-        {open && (
-          <div className="menu" style={{ position: "absolute", top: 34, left: 4 }} role="menu">
-            {ITEMS.map((it, i) => it === "sep" ? <div key={i} className="menu-sep" /> : (
-              <button key={it.id} role="menuitem" onClick={() => run(it.id)}><span className="grow">{it.label}</span>{it.hint && <span className="muted">{it.hint}</span>}</button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="tb-drag" data-tauri-drag-region />
+    <div className="picker" ref={ref}>
+      <button className="icon-btn" aria-label="Application menu" title="Menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}><Menu size={17} strokeWidth={1.75} /></button>
+      {open && (
+        <div className="menu" style={{ position: "absolute", top: 34, left: 0, zIndex: 70 }} role="menu">
+          {ITEMS.map((it, i) => it === "sep" ? <div key={i} className="menu-sep" /> : (
+            <button key={it.id} role="menuitem" onClick={() => run(it.id)}><span className="grow">{it.label}</span>{it.hint && <span className="muted">{it.hint}</span>}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Frameless window: minimize / maximize / close float over the top-right of the 48 px title row,
+ * like the reference app's overlay controls; rows under them reserve `--wc-inset`.
+ */
+export function WindowControls() {
+  const win = getCurrentWindow();
+  const [maxed, setMaxed] = useState(false);
+  useEffect(() => {
+    const sync = () => void win.isMaximized().then(setMaxed);
+    sync();
+    const un = win.onResized(sync);
+    return () => void un.then((f) => f());
+  }, [win]);
+  return (
+    <div className="win-controls">
       <button className="tb-btn" aria-label="Minimize" onClick={() => void win.minimize()}><Minus size={15} /></button>
       <button className="tb-btn" aria-label={maxed ? "Restore" : "Maximize"} onClick={() => void win.toggleMaximize()}>{maxed ? <Copy size={13} /> : <Square size={13} />}</button>
       <button className="tb-btn close" aria-label="Close" onClick={() => void win.close()}><X size={16} /></button>
