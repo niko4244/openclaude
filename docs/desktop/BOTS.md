@@ -47,7 +47,7 @@ is implemented against OpenClaude's own storage, prompting and approval machiner
   resumes the same thread; editing the memory changes the next request; deleting the bot keeps
   the chat and returns the empty roster.
 - `tsc -b` 0, eslint 0 errors.
-- Real model (`e2e/bots-real.e2e.mjs`, **9/9**, Ollama `qwen2.5vl:7b` on loopback, no network): a
+- Real model (`e2e/bots-real.e2e.mjs`, **12/12**, Ollama `qwen2.5vl:7b` on loopback, no network): a
   plain chat and a bot were asked the identical question on the same model. The plain chat said it
   could not determine the project or the release day; the bot, whose persona is a laconic lighthouse
   keeper and whose memory names the project, the weekday and the team size, replied *"I am Kestrel,
