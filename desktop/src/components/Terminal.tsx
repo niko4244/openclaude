@@ -17,7 +17,7 @@ export function detectDevUrl(line: string): string | null {
  * Command runner for the open workspace. Each command runs in its own
  * PowerShell process (not a persistent PTY), so `cd` does not carry over.
  */
-export function Terminal({ cwd }: { cwd: string }) {
+export function Terminal({ cwd, onDevicePreview }: { cwd: string; onDevicePreview?: (url: string) => void }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [input, setInput] = useState("");
   const [running, setRunning] = useState<string | null>(null);
@@ -65,6 +65,7 @@ export function Terminal({ cwd }: { cwd: string }) {
       {devUrl && (
         <div className="term-in">
           <button className="btn primary" onClick={() => invoke("preview_open", { url: devUrl }).catch((err) => push({ kind: "err", text: String(err) }))}>Preview {devUrl}</button>
+          {onDevicePreview && <button className="btn" onClick={() => onDevicePreview(devUrl)}>📱 Device preview</button>}
         </div>
       )}
       <div className="term-in">

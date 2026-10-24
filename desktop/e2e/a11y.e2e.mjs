@@ -168,6 +168,16 @@ try {
       if (label === "Code") {
         const ws = page.locator(".nav-item.mono").first();
         if (await ws.count()) { await ws.click(); await sleep(1200); await scan(page, "code workspace"); }
+        await page.click('button[aria-haspopup="menu"]');
+        await scan(page, "code folder menu");
+        await page.click('[role="menuitem"]:has-text("Remote (SSH)")');
+        await sleep(300);
+        await scan(page, "code remote (SSH) form");
+        await page.click('form[aria-label="Remote folder over SSH"] button:has-text("Cancel")');
+        await page.click('button:has-text("📱 Device")');
+        await sleep(800);
+        await scan(page, "code device preview");
+        await page.click('[aria-label="Close device preview"]');
       }
     });
   }
