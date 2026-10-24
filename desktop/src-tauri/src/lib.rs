@@ -974,6 +974,44 @@ async fn device_create(name: String, image: String, device: String) -> Res<()> {
     devices::create(&sdk, &name, &image, &device).await.map_err(e)
 }
 
+// ---------- device preview: web emulation of phones and tablets in the Code tab
+
+#[tauri::command]
+fn device_presets() -> Vec<browser::DevicePreset> {
+    browser::DEVICES.to_vec()
+}
+
+#[tauri::command]
+async fn device_preview_open(state: State<'_, Arc<AppState>>, url: String, device: String, landscape: bool, on_event: Channel<browser::PreviewEvent>) -> Res<()> {
+    let profile = state.mcp_config_path.parent().map(|p| p.join("device-preview")).unwrap_or_default();
+    browser::preview_open(&url, &device, landscape, &profile, Arc::new(move |ev| { let _ = on_event.send(ev); })).await.map_err(e)
+}
+
+#[tauri::command]
+async fn device_preview_set(device: String, landscape: bool) -> Res<()> {
+    browser::preview_set(&device, landscape).await.map_err(e)
+}
+
+#[tauri::command]
+async fn device_preview_input(input: browser::PreviewInput) -> Res<()> {
+    browser::preview_input(&input).await.map_err(e)
+}
+
+#[tauri::command]
+async fn device_preview_nav(action: String, url: Option<String>) -> Res<()> {
+    browser::preview_nav(&action, url.as_deref()).await.map_err(e)
+}
+
+#[tauri::command]
+async fn device_preview_info() -> Res<serde_json::Value> {
+    browser::preview_info().await.map_err(e)
+}
+
+#[tauri::command]
+async fn device_preview_close() {
+    browser::preview_close().await;
+}
+
 // ---------- sync (local-first, through a folder the user's cloud drive syncs)
 
 static SYNC: std::sync::LazyLock<std::sync::Mutex<sync::Memory>> = std::sync::LazyLock::new(Default::default);
@@ -1603,6 +1641,13 @@ pub fn run() {
             provider_remove,
             device_boot,
             device_create,
+            device_presets,
+            device_preview_open,
+            device_preview_set,
+            device_preview_input,
+            device_preview_nav,
+            device_preview_info,
+            device_preview_close,
             sync_now,
             sync_choose_folder,
             sync_off,
