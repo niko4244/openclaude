@@ -277,6 +277,32 @@ Write a short welcome note for {{name}}.
     await page.evaluate(() => delete document.documentElement.dataset.theme);
   });
 
+  // Bots: the empty roster, then one created through the form (the real path, so the
+  // populated state is drawn from saved data rather than a fixture), both themes.
+  await step("bots", async () => {
+    await page.click('.nav-item[aria-label="Bots"]');
+    await page.waitForSelector('.page h1:has-text("Bots")', { timeout: 10000 });
+    await page.waitForSelector('[data-bots="0"] .card:has-text("No bots yet")', { timeout: 10000 });
+    await scan(page, "bots (empty)");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "bots (empty)", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+
+    await page.click('button:has-text("New bot")');
+    await page.fill("#bot-name", "Ada");
+    await page.fill("#bot-persona", "Dry, precise, no filler. You are the release engineer.");
+    await page.fill("#bot-memory", "The user ships on Thursdays; the team has three engineers.");
+    await page.click('button:has-text("Save bot")');
+    await page.waitForSelector('[data-bots="1"] [data-bot]:has-text("Ada")', { timeout: 10000 });
+    await sleep(300);
+    await scan(page, "bots (populated)");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "bots (populated)", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+  });
+
   // a chat with one real exchange
   await step("chat", async () => {
     await page.keyboard.press("Control+n");
