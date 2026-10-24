@@ -4,9 +4,13 @@
 //  2. a populated registry     -> cards, sources, features, ledger, read-only
 //  3. an engine with a stub CLI-> Check now (IPC + JSON contract + refresh),
 //                                Pause, frequency and autonomy writes
+//  4. a corrupt registry file  -> named as corrupt, not missing; no invented
+//                                data; the broken file is left untouched
+//  5. an engine that exits 3   -> the failure (status, exit code, stderr) is
+//                                reported, no success toast, registry intact
 //
-// No network and no model: the stub prints the JSON contract the real engine
-// prints, and writes the registry the page reloads.
+// No network and no model: the stubs print the JSON contract the real engine
+// prints, and write the registry the page reloads.
 //
 //   node e2e/evolution.e2e.mjs [path\to\openclaude-desktop.exe]
 import { chromium } from "playwright-core";
@@ -89,8 +93,8 @@ const fixtureLedger = {
   }],
 };
 
-/** An engine directory shaped like `desktop/feature-intel`, with no CLI. */
-function engineDir({ registry = true, cli = false } = {}) {
+/** An engine directory shaped like `desktop/feature-intel`. */
+function engineDir({ registry = true, cli = false, cliScript = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "oc-evo-e2e-"));
   const dir = join(root, "desktop", "feature-intel");
   mkdirSync(dir, { recursive: true });
@@ -99,7 +103,9 @@ function engineDir({ registry = true, cli = false } = {}) {
     writeFileSync(join(dir, "config.json"), JSON.stringify(fixtureConfig, null, 2));
     writeFileSync(join(dir, "ledger.json"), JSON.stringify(fixtureLedger, null, 2));
   }
-  if (cli) {
+  if (cliScript) {
+    writeFileSync(join(dir, "cli.mjs"), cliScript);
+  } else if (cli) {
     writeFileSync(join(dir, "cli.mjs"), `import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -222,6 +228,7 @@ try {
       const task = await ui.locator('[data-task="task_a"]').innerText();
       record("the implementation ledger is visible", /queued/.test(task), task.replace(/\s+/g, " "));
 
+      record("a readable registry is reported as ok", (await ui.locator("[data-registry-state]").first().getAttribute("data-registry-state")) === "ok");
       record("a synced registry is labelled read-only", /read-only/.test(await ui.locator(".card").first().innerText()));
       record("Check now explains why it cannot run", await ui.locator('button:has-text("Check for Claude updates")').isDisabled());
       record("frequency and autonomy are not editable without an engine", (await ui.locator("#evo-interval").count()) === 0 && (await ui.locator("#evo-autonomy").count()) === 0);
@@ -270,6 +277,62 @@ try {
       await ui.waitForSelector('button:has-text("Pause")', { timeout: 10000 });
       record("Resume restores enabled:true", config(dir).enabled === true);
       record("the config keeps unrelated keys", config(dir).version === 1 && config(dir).monitoring?.desktopApp === true && existsSync(join(dir, "registry.json")));
+    } finally {
+      await close();
+    }
+  }
+
+  // ---- 4. a corrupt registry file -------------------------------------------
+  {
+    const { dir } = engineDir({ registry: false });
+    // what a killed sweep leaves behind: a file that exists but is truncated
+    const broken = '{\n  "schemaVersion": 1,\n  "features": [\n';
+    writeFileSync(join(dir, "registry.json"), broken);
+    const dataDir = mkdtempSync(join(tmpdir(), "oc-evo-profile-"));
+    const ui = await launch(dir, dataDir);
+    try {
+      await ui.waitForSelector('.card:has-text("Feature registry could not be read")', { timeout: 15000 });
+      const card = await ui.locator('.card:has-text("Feature registry could not be read")').innerText();
+      const state = await ui.locator("[data-registry-state]").first().getAttribute("data-registry-state");
+      record("a corrupt registry is named as corrupt, not as missing", state === "invalid" && /corrupt/.test(card) && !/No feature registry/.test(card), `${state}: ${card.replace(/\s+/g, " ").slice(0, 140)}`);
+      record("the parse failure and the file behind it are shown", /not valid JSON/.test(card) && /registry\.json/.test(card), card.replace(/\s+/g, " ").slice(0, 200));
+      record("a corrupt registry is not replaced by invented data", (await ui.locator('.card:has-text("Parity coverage")').count()) === 0 && (await ui.locator('[data-source]').count()) === 0);
+      record("Check now is disabled when only a broken file is present", await ui.locator('button:has-text("Check for Claude updates")').isDisabled());
+      record("Pause is not offered for a broken registry", (await ui.locator('button:has-text("Pause")').count()) === 0);
+      record("the broken file is left for a person to inspect", readFileSync(join(dir, "registry.json"), "utf8") === broken);
+    } finally {
+      await close();
+    }
+  }
+
+  // ---- 5. a sweep whose engine exits non-zero -------------------------------
+  {
+    const { dir } = engineDir({
+      registry: true,
+      cliScript: 'process.stderr.write("simulated upstream failure: 502 bad gateway\\n");\nprocess.exit(3);\n',
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), "oc-evo-profile-"));
+    const ui = await launch(dir, dataDir);
+    try {
+      await ui.waitForSelector('.card:has-text("Untriaged signals")', { timeout: 15000 });
+      const before = readFileSync(join(dir, "registry.json"), "utf8");
+      const startSweep = await ui.locator('.card:has-text("Last sweep")').innerText();
+      record("the failing engine starts from the last good sweep", /\b3\b/.test(startSweep) && /0 source\(s\) failed/.test(startSweep), startSweep.replace(/\s+/g, " "));
+
+      await ui.click('button:has-text("Check for Claude updates")');
+      await ui.waitForSelector('.toast:has-text("Check failed")', { timeout: 30000 });
+      const toast = await ui.locator(".toast").innerText();
+      record("a non-zero engine exit is reported as a failure", /Check failed/.test(toast) && /exit 3/.test(toast) && /failed/.test(toast), toast);
+      record("the engine's stderr reaches the user", /502 bad gateway/.test(toast), toast);
+      record("a failed sweep shows no success toast", (await ui.locator('.toast:has-text("Checked official sources")').count()) === 0 && /\+0 new/.test(toast) === false);
+      record("a failed sweep cannot rewrite the registry", readFileSync(join(dir, "registry.json"), "utf8") === before);
+      const sweep = await ui.locator('.card:has-text("Last sweep")').innerText();
+      record("the page keeps the last good numbers", /\b3\b/.test(sweep) && /0 source\(s\) failed/.test(sweep), sweep.replace(/\s+/g, " "));
+      await ui.waitForFunction(() => {
+        const b = [...document.querySelectorAll("button")].find((x) => x.textContent?.includes("Check for Claude updates"));
+        return !!b && !b.disabled && !b.textContent.includes("Checking");
+      }, null, { timeout: 10000 });
+      record("Check now is usable again after a failure", true);
     } finally {
       await close();
     }

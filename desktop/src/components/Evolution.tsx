@@ -45,7 +45,19 @@ export function EvolutionPage({ toast }: { toast: (m: string) => void }) {
     setBusy(true);
     try {
       const r = await api.evolutionCheck();
-      toast(`Checked official sources: +${r.added} new, ~${r.changed} changed (${r.status}).`);
+      const failed = (r.exit_code != null && r.exit_code !== 0) || r.status === "failed" || r.status === "registry-error";
+      if (failed) {
+        // The engine's own words, not a success toast with a zero in it. The
+        // registry is reloaded anyway: a failed sweep may still have written it.
+        const detail = r.stderr.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "the engine reported no details";
+        toast(`Check failed (${r.status}${r.exit_code != null ? `, exit ${r.exit_code}` : ""}): ${detail}`);
+      } else if (r.status === "locked") {
+        toast("A sweep is already running; nothing was changed.");
+      } else if (r.status === "disabled") {
+        toast("Monitoring is paused; nothing was checked.");
+      } else {
+        toast(`Checked official sources: +${r.added} new, ~${r.changed} changed (${r.status}).`);
+      }
       await load();
     } catch (e) {
       toast(`Check failed: ${e}`);
@@ -73,9 +85,16 @@ export function EvolutionPage({ toast }: { toast: (m: string) => void }) {
       ? "a sweep is due"
       : `next in about ${Math.max(1, Math.round((nextDue - Date.now()) / 3_600_000))} h`;
 
+  const emptyTitle =
+    status?.registry_state === "invalid" || status?.registry_state === "unreadable"
+      ? "Feature registry could not be read"
+      : "No feature registry on this machine";
+  const emptyBadge =
+    status?.registry_state === "invalid" ? "corrupt" : status?.registry_state === "unreadable" ? "unreadable" : "not synced";
+
   return (
     <div className="page">
-      <div className="page-inner">
+      <div className="page-inner" data-registry-state={status?.registry_state ?? "unknown"}>
         <div className="page-head">
           <h1>Evolution</h1>
           <span className="spacer" />
@@ -98,8 +117,8 @@ export function EvolutionPage({ toast }: { toast: (m: string) => void }) {
         ) : !status.available ? (
           <div className="card">
             <div className="card-head">
-              <span className="name">No feature registry on this machine</span>
-              <span className="badge">not synced</span>
+              <span className="name">{emptyTitle}</span>
+              <span className="badge">{emptyBadge}</span>
             </div>
             <p className="muted">{status.reason}</p>
             <p className="muted">

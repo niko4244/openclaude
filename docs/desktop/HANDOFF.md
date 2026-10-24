@@ -31,7 +31,7 @@ $env:OPENCLAUDE_LITELLM_KEY = <LITELLM_MASTER_KEY from C:\Users\nikma\Brainz\inf
 node e2e/desktop.e2e.mjs            # real GUI over WebView2 CDP, live gateway; last: 32/32
 node e2e/a11y.e2e.mjs               # axe audit; exits 1 on critical/serious
 node e2e/artifact-isolation.e2e.mjs # 4/4
-node e2e/evolution.e2e.mjs          # 28/28, no model or network
+node e2e/evolution.e2e.mjs          # 43/43, no model or network
 node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 ```
 
@@ -98,6 +98,7 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - C: was down to 1.8 GB. Clearing `src-tauri/target/debug` and the record-skill worktree's target freed about 25 GB; both regenerate.
 - **Session 2026-10-24 (after the v0.2.0 release):**
   - Providers (row 27), self-maintenance (row 28), Duet-style proactive assistant and approvals inbox (row 29), and the repo secret scan (clean).
+  - Duet (row 29) re-verified on this build (2026-10-24): `e2e/inbox.e2e.mjs` **7/7** with a direct Ollama model (`OC_INBOX_MODEL=qwen3.8-9b-abliterated:q4_K_M`): a background run queues the unapproved connector tool, the chat records that it is waiting, approving runs it, the assistant continues in that chat, the inbox clears, and the Proactive assistant card creates the morning brief and check-ins. `llama3.2:3b` instead wrote a text-shaped pseudo tool call and queued nothing, so 3B models cannot drive this suite on this machine. The Rust side is covered by `inbox::tests` 2/2.
   - Parallel sessions, each in its own worktree and branch, to be merged after review:
     - `record-skill`: Record a skill (Claude Cowork, July 2026).
     - `prompt-library`: prompt library with GitHub collections.
@@ -179,13 +180,16 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **App:** new **Evolution** page (`src/components/Evolution.tsx`, `src-tauri/src/evolution.rs`), sidebar entry, commands `evolution_status`, `evolution_check`, `evolution_configure`, plus a 15-minute ticker that only runs a sweep when one is due.
 - **CI:** `.github/workflows/claude-feature-watch.yml` runs every 6 h, commits the registry to `evolution/registry` and opens/updates a PR. It never pushes to `main` and never runs third-party code.
 - **Commands:** `bun run evolution` (CLI), `bun run evolution:check`, `bun run test:evolution`; in the app, Evolution → Check for Claude updates / Pause.
-- **Verified 2026-10-24:** engine tests 33/33, Rust lib 127 passed (5 new `evolution::` tests), `tsc -b` 0, `vite build` ok, eslint 0 errors. Live sweep: 141 signals from 8 sources, second run +0 (idempotent). Three real signals classified as `partial` with matrix-based notes; `docs/feature-parity.md` generated. REA is not installed on this machine, so `investigate` correctly returned **blocked** (exit 2). A temp-copy end-to-end run produced a ledger task, executed a real gate, and wrote a PR draft with the gate result (`ready-for-review`).
-- **Real-app E2E (`e2e/evolution.e2e.mjs`, 28/28 on 2026-10-24):** three launches against a rebuilt release exe.
+- **Verified 2026-10-24:** engine tests 33/33, Rust lib 129 passed (7 `evolution::` tests), `tsc -b` 0, `vite build` ok, eslint 0 errors. Live sweep: 141 signals from 8 sources, second run +0 (idempotent). Three real signals classified as `partial` with matrix-based notes; `docs/feature-parity.md` generated. REA is not installed on this machine, so `investigate` correctly returned **blocked** (exit 2). A temp-copy end-to-end run produced a ledger task, executed a real gate, and wrote a PR draft with the gate result (`ready-for-review`).
+- **Real-app E2E (`e2e/evolution.e2e.mjs`, 43/43 on 2026-10-24):** five launches against a rebuilt release exe.
   - No registry (explicit `OPENCLAUDE_EVOLUTION_DIR`): empty state, disabled Check, no Pause, no invented cards.
   - Populated registry, no CLI: counts, 50% coverage, failed-source error, gap-first ordering, blocker + source, ledger row, read-only label, no editable controls.
   - Engine with a stub CLI: `check --quiet --json` is what the app runs (asserted from the stub's argv and cwd), toast shows +2, the page reloads the new registry, Pause/Resume and interval/autonomy write `config.json` while preserving other keys.
+  - Corrupt registry (a file truncated mid-write): the page says **Feature registry could not be read** with a `corrupt` badge, names the parse error and the path, invents no counts, disables Check, and leaves the broken file untouched. `evolution_status` now reports `registry_state` = `ok` / `missing` / `invalid` / `unreadable`, so a truncated file no longer looks like a machine that never synced.
+  - Engine exits 3: the toast is `Check failed (failed, exit 3): …` with the engine's stderr, no success toast, the registry still holds the last good numbers, and Check is usable again afterwards. The success path, partial failures and `locked` / `disabled` remain distinct.
   - Runs under the shared `%TEMP%/oc-e2e.lock`; each launch gets an OS-assigned port (fixed ranges collided with an unrelated service).
 - **Accessibility (`e2e/a11y.e2e.mjs`, 2026-10-24):** the audit now scans the Evolution page in four states — empty and populated, each light and dark (34 states total, still **0** violations, exit 0). The empty state is scanned first; the audit then writes a fixture registry into the same `OPENCLAUDE_EVOLUTION_DIR` and presses Refresh, so both states come from one launch.
+- **Error states (2026-10-24):** `evolution_status` distinguishes a missing registry from an unreadable or invalid one (`registry_state`), and the page renders that difference instead of claiming "No registry yet". A sweep whose engine exits non-zero is reported as a failure with the exit code and the engine's stderr, and never as a `+0 new` success. Rust `evolution::` tests 7/7 (corrupt registry, non-zero exit, and a test tempdir fix: two parallel tests could share a name and race).
 - **Not verified:** the desktop ticker was not observed firing (it needs 15 minutes plus a due registry). The workflow has not run on GitHub.
 
 ## Next steps (in order)

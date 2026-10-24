@@ -426,6 +426,7 @@ export type EvolutionStatus = {
   reason: string | null;
   engine_dir: string;
   registry_path: string | null;
+  registry_state: "ok" | "missing" | "invalid" | "unreadable" | string;
   enabled: boolean;
   interval_hours: number;
   autonomy: string;

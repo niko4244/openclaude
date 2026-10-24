@@ -83,6 +83,10 @@ pub struct EvolutionStatus {
     pub reason: Option<String>,
     pub engine_dir: String,
     pub registry_path: Option<String>,
+    /// "ok", "missing", "invalid" (the file exists but is not JSON) or
+    /// "unreadable" (permissions, I/O). A truncated file must not look like a
+    /// machine that never synced.
+    pub registry_state: String,
     pub enabled: bool,
     pub interval_hours: u32,
     pub autonomy: String,
@@ -99,6 +103,32 @@ pub struct EvolutionStatus {
 
 fn read_json(p: &Path) -> Option<Value> {
     std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Read the registry while keeping the three failure modes apart: absent,
+/// present but invalid JSON, and present but unreadable.
+fn read_registry(dir: &Path) -> (Option<Value>, &'static str, Option<String>) {
+    let path = dir.join("registry.json");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) => (Some(v), "ok", None),
+            Err(e) => (
+                None,
+                "invalid",
+                Some(format!(
+                    "{} is not valid JSON ({}). It was left untouched so it can be inspected or restored.",
+                    path.display(),
+                    e
+                )),
+            ),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, "missing", None),
+        Err(e) => (
+            None,
+            "unreadable",
+            Some(format!("Could not read {}: {e}.", path.display())),
+        ),
+    }
 }
 
 fn node_version() -> Option<String> {
@@ -297,7 +327,7 @@ fn summary_of(registry: &Value) -> SummaryRow {
 
 /// Pure over the files on disk: no network, no process spawn beyond `node --version`.
 pub fn build(dir: &Path) -> EvolutionStatus {
-    let registry = read_json(&dir.join("registry.json"));
+    let (registry, registry_state, registry_error) = read_registry(dir);
     let config = read_json(&dir.join("config.json")).unwrap_or_else(|| json!({}));
     let ledger = read_json(&dir.join("ledger.json")).unwrap_or_else(|| json!({ "tasks": [] }));
     let cli = dir.join("cli.mjs");
@@ -320,6 +350,7 @@ pub fn build(dir: &Path) -> EvolutionStatus {
                 reason: None,
                 engine_dir: dir.to_string_lossy().to_string(),
                 registry_path: Some(dir.join("registry.json").to_string_lossy().to_string()),
+                registry_state: registry_state.to_string(),
                 enabled,
                 interval_hours: config.get("intervalHours").and_then(|v| v.as_u64()).unwrap_or(6) as u32,
                 autonomy: str_of(&config, "autonomy").unwrap_or_else(|| "research".into()),
@@ -346,12 +377,12 @@ pub fn build(dir: &Path) -> EvolutionStatus {
         }
         None => EvolutionStatus {
             available: false,
-            reason: Some(format!(
-                "No registry yet at {}.",
-                dir.join("registry.json").display()
-            )),
+            reason: Some(registry_error.unwrap_or_else(|| {
+                format!("No registry yet at {}.", dir.join("registry.json").display())
+            })),
             engine_dir: dir.to_string_lossy().to_string(),
             registry_path: None,
+            registry_state: registry_state.to_string(),
             enabled,
             interval_hours: config.get("intervalHours").and_then(|v| v.as_u64()).unwrap_or(6) as u32,
             autonomy: str_of(&config, "autonomy").unwrap_or_else(|| "research".into()),
@@ -374,6 +405,7 @@ pub fn status(data_dir: &Path) -> EvolutionStatus {
         None => EvolutionStatus {
             available: false,
             reason: Some("The Evolution Engine is not installed on this machine. The repository workflow records the registry; install a checkout or point OPENCLAUDE_EVOLUTION_DIR at one to see it here.".into()),
+            registry_state: "missing".into(),
             ..Default::default()
         },
     }
@@ -411,6 +443,10 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Res<(Option<i32>, St
 /// concurrent sweep (from the ticker or another process); that returns "locked".
 pub fn run_check(data_dir: &Path) -> Res<Value> {
     let dir = resolve_dir(data_dir).ok_or("The Evolution Engine is not installed on this machine.")?;
+    run_check_at(&dir)
+}
+
+pub fn run_check_at(dir: &Path) -> Res<Value> {
     let cli = dir.join("cli.mjs");
     if !cli.is_file() {
         return Err("This registry was synced from another machine; there is no engine here to run.".into());
@@ -515,9 +551,20 @@ pub fn start_ticker(data_dir: PathBuf) {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Tests run in parallel in one process and the clock can be coarse, so a
+    /// name made only of the current time can collide between two tests.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn tempdir() -> PathBuf {
-        let p = std::env::temp_dir().join(format!("oc-evo-rs-{}-{}", std::process::id(), rand_suffix()));
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!(
+            "oc-evo-rs-{}-{}-{}",
+            std::process::id(),
+            rand_suffix(),
+            n
+        ));
         fs::create_dir_all(&p).unwrap();
         p
     }
@@ -585,9 +632,48 @@ mod tests {
         let dir = tempdir();
         let st = build(&dir);
         assert!(!st.available);
+        assert_eq!(st.registry_state, "missing");
         assert!(st.reason.unwrap().contains("No registry"));
         assert!(!st.can_check);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_reports_a_corrupt_registry_instead_of_pretending_it_is_missing() {
+        let dir = tempdir();
+        // a file truncated mid-write, as a killed sweep would leave it
+        let broken = "{\n  \"schemaVersion\": 1,\n  \"features\": [\n";
+        fs::write(dir.join("registry.json"), broken).unwrap();
+        let st = build(&dir);
+        assert!(!st.available);
+        assert_eq!(st.registry_state, "invalid");
+        let reason = st.reason.unwrap_or_default();
+        assert!(reason.contains("not valid JSON"), "{reason}");
+        assert!(reason.contains("registry.json"), "{reason}");
+        assert_eq!(st.summary.total, 0, "no data may be invented from a broken file");
+        assert!(st.features.is_empty() && st.sources.is_empty());
+        // the file is evidence: the dashboard must not rewrite or repair it
+        assert_eq!(fs::read_to_string(dir.join("registry.json")).unwrap(), broken);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn run_check_reports_a_non_zero_engine_exit() {
+        let root = tempdir();
+        let dir = root.join("desktop").join("feature-intel");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("cli.mjs"),
+            "process.stderr.write('boom: upstream 502\\n');\nprocess.exit(3);\n",
+        )
+        .unwrap();
+        assert!(dir.join("cli.mjs").is_file());
+        let r = run_check_at(&dir).expect("a finished process is not an IPC error");
+        assert_eq!(r["exit_code"], 3);
+        assert_eq!(r["status"], "failed");
+        assert_eq!(r["added"], 0);
+        assert!(r["stderr"].as_str().unwrap_or_default().contains("upstream 502"));
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
