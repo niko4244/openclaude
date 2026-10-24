@@ -1,4 +1,5 @@
 mod agent;
+mod bots;
 mod browser;
 mod chat;
 mod chrome_bridge;
@@ -957,6 +958,44 @@ fn proactive_set(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, config:
     inbox::set(&state.db.lock().unwrap(), &config).map_err(e)?;
     let _ = app.emit("tasks-changed", ());
     Ok(())
+}
+
+// ---------- bots (persistent teammates)
+
+#[tauri::command]
+fn bots_list(state: State<'_, Arc<AppState>>) -> Res<Vec<bots::Bot>> {
+    state.db.lock().unwrap().bots().map_err(e)
+}
+
+#[tauri::command]
+fn bot_save(state: State<'_, Arc<AppState>>, bot: bots::Bot) -> Res<bots::Bot> {
+    let mut saved = bot;
+    state.db.lock().unwrap().save_bot(&mut saved).map_err(e)?;
+    Ok(saved)
+}
+
+#[tauri::command]
+fn bot_delete(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    state.db.lock().unwrap().delete_bot(&id).map_err(e)
+}
+
+/// Open a bot's thread, creating it on first use. The conversation is a normal
+/// chat: it appears in the sidebar, keeps its history and can be deleted there.
+#[tauri::command]
+fn bot_chat(state: State<'_, Arc<AppState>>, id: String) -> Res<db::Conversation> {
+    let db = state.db.lock().unwrap();
+    let mut bot = db.get_bot(&id).map_err(e)?.ok_or("That bot is gone")?;
+    if let Some(cid) = bot.conversation_id.clone() {
+        if let Ok(Some(existing)) = db.get_conversation(&cid) {
+            return Ok(existing);
+        }
+    }
+    let mut c = db.create_conversation(None, bot.model.as_deref()).map_err(e)?;
+    c.title = bot.name.clone();
+    db.update_conversation(&c).map_err(e)?;
+    bot.conversation_id = Some(c.id.clone());
+    db.save_bot(&mut bot).map_err(e)?;
+    Ok(c)
 }
 
 // ---------- self-maintenance (diagnostics, self-tests, self-repair)
@@ -2060,6 +2099,10 @@ pub fn run() {
             report_error,
             pending_list,
             pending_decide,
+            bots_list,
+            bot_save,
+            bot_delete,
+            bot_chat,
             proactive_get,
             proactive_set,
             diagnostics,

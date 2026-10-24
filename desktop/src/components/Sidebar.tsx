@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  Code2, FolderClosed, ListChecks, MessagesSquare, MoreHorizontal, PanelLeft, Pin, PinOff, Pencil, Search, Settings as Cog, Sparkles, SquarePen, Trash2,
+  Bot as BotIcon, Code2, FolderClosed, ListChecks, MessagesSquare, MoreHorizontal, PanelLeft, Pin, PinOff, Pencil, Search, Settings as Cog, Sparkles, SquarePen, Trash2,
 } from "lucide-react";
 import type { Conversation, GatewayStatus, Project } from "../api";
 import { Logo } from "./Logo";
 import { AppMenu } from "./TitleBar";
 
-export type Page = "chat" | "chats" | "projects" | "tasks" | "evolution" | "code" | "settings";
+export type Page = "chat" | "chats" | "projects" | "tasks" | "bots" | "evolution" | "code" | "settings";
 
 export function Sidebar({
   collapsed,
@@ -119,6 +119,7 @@ export function Sidebar({
         <NavBtn icon={MessagesSquare} label="Chats" active={page === "chats"} onClick={() => onNavigate("chats")} />
         <NavBtn icon={FolderClosed} label="Projects" active={page === "projects"} onClick={() => onNavigate("projects")} />
         <NavBtn icon={ListChecks} label="Tasks" active={page === "tasks"} onClick={() => onNavigate("tasks")} />
+        <NavBtn icon={BotIcon} label="Bots" active={page === "bots"} onClick={() => onNavigate("bots")} title="Persistent teammates with their own persona, memory and thread" />
         <NavBtn icon={Sparkles} label="Evolution" active={page === "evolution"} onClick={() => onNavigate("evolution")} title="Feature parity and the Claude release watcher" />
         <NavBtn icon={Code2} label="Code" active={page === "code"} onClick={() => onNavigate("code")} />
       </nav>

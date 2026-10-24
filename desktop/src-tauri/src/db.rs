@@ -49,6 +49,12 @@ const MIGRATIONS: &[&str] = &[
         server TEXT NOT NULL, tool TEXT NOT NULL, arguments TEXT NOT NULL, model TEXT,
         status TEXT NOT NULL DEFAULT 'pending', result TEXT, created_at INTEGER NOT NULL, decided_at INTEGER);
      CREATE INDEX pending_status ON pending_actions(status, created_at);",
+    // v7: bots (persistent teammates). The thread is a normal conversation.
+    "CREATE TABLE bots(
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, persona TEXT NOT NULL DEFAULT '',
+        memory TEXT NOT NULL DEFAULT '', model TEXT, workspace TEXT, conversation_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+     CREATE INDEX bots_conversation ON bots(conversation_id);",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

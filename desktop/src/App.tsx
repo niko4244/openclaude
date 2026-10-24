@@ -18,6 +18,7 @@ import { ChatsPage, ProjectKnowledge, ProjectsPage, SearchPalette, ago } from ".
 import { ToolsMenu } from "./components/ToolsMenu";
 import { RecordSkillDialog } from "./components/RecordSkillDialog";
 import { TasksPage } from "./components/TasksPage";
+import { BotsPage } from "./components/BotsPage";
 import { EvolutionPage } from "./components/Evolution";
 import { FillPrompt, PromptLibrary, placeholders } from "./components/PromptLibrary";
 import { WindowControls } from "./components/TitleBar";
@@ -425,6 +426,8 @@ export default function App() {
           <EvolutionPage toast={toast} />
         ) : view === "tasks" ? (
           <TasksPage models={models} defaultModel={model} onOpenChat={(id) => { void refreshConvs(); openChat(id); }} toast={toast} />
+        ) : view === "bots" ? (
+          <BotsPage models={models} defaultModel={model} onOpenChat={(id) => { void refreshConvs(); openChat(id); }} toast={toast} />
         ) : view === "chats" ? (
           <ChatsPage onOpen={openChat} onNew={newChat} />
         ) : view === "projects" ? (

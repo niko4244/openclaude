@@ -227,6 +227,10 @@ export const api = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   providerPresets: () => invoke<ProviderPreset[]>("provider_presets"),
   reportError: (message: string, detail: string) => invoke<void>("report_error", { message, detail }),
+  botsList: () => invoke<Bot[]>("bots_list"),
+  botSave: (bot: Bot) => invoke<Bot>("bot_save", { bot }),
+  botDelete: (id: string) => invoke<void>("bot_delete", { id }),
+  botChat: (id: string) => invoke<Conversation>("bot_chat", { id }),
   pendingList: () => invoke<PendingAction[]>("pending_list"),
   pendingDecide: (id: string, approve: boolean) => invoke<void>("pending_decide", { id, approve }),
   proactiveGet: () => invoke<Proactive>("proactive_get"),
@@ -442,3 +446,4 @@ export type EvolutionStatus = {
 };
 export type PendingAction = { id: string; conversation_id: string; conversation_title: string; server: string; tool: string; arguments: unknown; model: string | null; status: string; result: string | null; created_at: number };
 export type Proactive = { enabled: boolean; brief_at: string; every_hours: number; model: string };
+export type Bot = { id: string; name: string; persona: string; memory: string; model: string | null; workspace: string | null; conversation_id: string | null; created_at: number; updated_at: number };

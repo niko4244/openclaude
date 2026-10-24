@@ -142,6 +142,10 @@ fn system_prompt(state: &AppState, conversation_id: &str, query: &str, model: &s
             }
         }
     }
+    // A bot's persona and memory belong to its own thread only.
+    if let Some(b) = db.bot_for_conversation(conversation_id) {
+        parts.push(crate::bots::prompt_block(&b));
+    }
     parts.join("\n\n")
 }
 
