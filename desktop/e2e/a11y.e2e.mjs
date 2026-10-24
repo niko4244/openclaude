@@ -260,6 +260,21 @@ Write a short welcome note for {{name}}.
     await sleep(300);
     await scan(page, "evolution (populated)", "dark");
     await page.evaluate(() => delete document.documentElement.dataset.theme);
+
+    // A corrupt registry is its own state: the card must name the parse failure (with the
+    // path) instead of reading like an empty machine. It is scanned in both themes too.
+    writeFileSync(join(evoDir, "registry.json"), '{ "schemaVersion": 1, "features": [ }');
+    await page.click('button[aria-label="Refresh status"]');
+    await page.waitForSelector('[data-registry-state="invalid"] .card:has-text("Feature registry could not be read")', { timeout: 10000 });
+    const corrupt = await page.locator('[data-registry-state="invalid"] .card').innerText();
+    if (!/not valid JSON/.test(corrupt)) throw new Error(`corrupt-registry card did not name the parse failure: ${corrupt.replace(/\s+/g, " ").slice(0, 180)}`);
+    if (!(await page.locator('[data-registry-state="invalid"] .badge:has-text("corrupt")').count())) throw new Error("corrupt-registry card is missing its badge");
+    await sleep(300);
+    await scan(page, "evolution (corrupt)");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "evolution (corrupt)", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
   });
 
   // a chat with one real exchange
