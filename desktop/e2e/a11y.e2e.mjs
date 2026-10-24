@@ -132,6 +132,14 @@ try {
   db.prepare("INSERT INTO project_files(id,project_id,name,text,size,created_at) VALUES('f-a11y','p-a11y','brief.md',?,100,?)").run("Internal brief. Codename BLUE-HERON-7.", now);
   db.prepare("INSERT INTO tasks(id,title,prompt,model,schedule,enabled,created_at) VALUES('t-a11y','Daily ping','Reply with one word.',?,'manual',1,?)").run(model, now);
   db.close();
+  mkdirSync(join(dataDir, "prompts", "mine"), { recursive: true });
+  writeFileSync(join(dataDir, "prompts", "mine", "welcome-note.md"), `---
+title: "Welcome note"
+description: "Greets a new teammate"
+tags: [team]
+---
+Write a short welcome note for {{name}}.
+`);
 
   app = await launch();
   const { page } = app;
@@ -145,7 +153,7 @@ try {
   await step("settings", async () => {
     await page.keyboard.press("Control+,");
     await page.waitForSelector('button[role="tab"]', { timeout: 5000 });
-    for (const tab of ["General", "Gateway", "Providers", "Models", "Connectors", "Plugins", "Extensions", "Projects", "Diagnostics", "About"]) {
+    for (const tab of ["General", "Gateway", "Providers", "Models", "Connectors", "Plugins", "Prompt library", "Extensions", "Projects", "Diagnostics", "About"]) {
       const t = page.locator(`button[role="tab"]:has-text("${tab}")`).first();
       if (!(await t.count())) { stateLog.push({ state: `settings:${tab}`, error: "tab not found" }); continue; }
       await t.click();
@@ -153,6 +161,27 @@ try {
       await scan(page, `settings:${tab}`);
     }
     await page.click('[aria-label="Close settings"]').catch(() => page.keyboard.press("Escape"));
+    await sleep(300);
+  });
+
+  await step("prompt library", async () => {
+    await page.click('.composer button[aria-label="Prompt library"]');
+    await page.waitForSelector('[role="dialog"][aria-labelledby="library-title"] .library-row', { timeout: 5000 });
+    await sleep(300);
+    await scan(page, "prompt library");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "prompt library", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+    await page.click('.library-head button:has-text("New prompt")');
+    await sleep(300);
+    await scan(page, "prompt library: new prompt");
+    await page.keyboard.press("Escape");
+    await page.click('.library-actions button.primary:has-text("Insert")');
+    await page.waitForSelector('[role="dialog"][aria-labelledby="fill-title"]', { timeout: 5000 });
+    await sleep(300);
+    await scan(page, "prompt library: fill values");
+    await page.keyboard.press("Escape");
     await sleep(300);
   });
 

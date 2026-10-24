@@ -5,7 +5,7 @@ import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { BookOpen, ChevronDown, Code2, Coffee, Download, Lightbulb, PenLine, Pin, PinOff, Pencil, Trash2 } from "lucide-react";
-import { api, textOf, type Attachment, type Conversation, type GatewayStatus, type Message, type ModelEntry, type Project } from "./api";
+import { api, textOf, type Attachment, type Conversation, type GatewayStatus, type Message, type ModelEntry, type Project, type Prompt } from "./api";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { Composer, buildContent } from "./components/Composer";
@@ -17,6 +17,7 @@ import { FindBar, ShortcutsSheet } from "./components/FindBar";
 import { ChatsPage, ProjectKnowledge, ProjectsPage, SearchPalette, ago } from "./components/Pages";
 import { ToolsMenu } from "./components/ToolsMenu";
 import { TasksPage } from "./components/TasksPage";
+import { FillPrompt, PromptLibrary, placeholders } from "./components/PromptLibrary";
 import { WindowControls } from "./components/TitleBar";
 import { Logo } from "./components/Logo";
 import { extractArtifacts, type Artifact } from "./components/Markdown";
@@ -69,6 +70,9 @@ export default function App() {
   const [titleMenu, setTitleMenu] = useState(false);
   const [userName, setUserName] = useState("there");
   const [seed, setSeed] = useState<{ key: string; text: string }>({ key: "home", text: "" });
+  const [library, setLibrary] = useState(false);
+  const [filling, setFilling] = useState<Prompt | null>(null);
+  const [insertReq, setInsertReq] = useState<{ key: string; text: string } | null>(null);
   const [measured, setMeasured] = useState<Record<string, Record<string, boolean>>>({});
   const draftTimer = useRef<number | undefined>(undefined);
 
@@ -318,6 +322,20 @@ export default function App() {
     void send(text, [], { fresh: true, model: m });
   };
 
+  // Prompt library: a prompt with placeholders asks for their values, then lands in the composer.
+  const insertText = (text: string) => setInsertReq({ key: `${Date.now()}`, text });
+  const applyPrompt = (p: Prompt) => {
+    setLibrary(false);
+    if (placeholders(p.body).length) setFilling(p);
+    else insertText(p.body);
+  };
+  const pickPrompt = async (name: string) => {
+    const p = (await api.promptsList().catch(() => [])).find((x) => x.name === name);
+    if (p) applyPrompt(p);
+    else toast(`No prompt /${name}`);
+  };
+  const composerLibrary = { onOpenLibrary: () => setLibrary(true), onPickPrompt: (n: string) => void pickPrompt(n), insert: insertReq };
+
   const saveDraft = (t: string) => {
     if (!active) return;
     clearTimeout(draftTimer.current);
@@ -340,7 +358,7 @@ export default function App() {
     <div className="shell">
     <WindowControls />
     {/* While a dialog is open the page behind it is inert (not focusable, hidden from assistive tech). */}
-    <div className="app" inert={searchOpen || sheetOpen || page === "settings" || undefined} aria-hidden={searchOpen || sheetOpen || page === "settings" || undefined}>
+    <div className="app" inert={searchOpen || sheetOpen || library || !!filling || page === "settings" || undefined} aria-hidden={searchOpen || sheetOpen || library || !!filling || page === "settings" || undefined}>
       <Sidebar
         collapsed={collapsed}
         conversations={convs}
@@ -420,6 +438,7 @@ export default function App() {
                 initialDraft={seed.text}
                 placeholder="How can I help you today?"
                 onError={toast}
+                {...composerLibrary}
               />
               {!project && (
                 <div className="suggestions">
@@ -475,6 +494,7 @@ export default function App() {
                   autoFocus
                   focusKey={activeId}
                   onError={toast}
+                  {...composerLibrary}
                 />
                 <div className="hint">OpenClaude can make mistakes. Replies come from {model || "your selected model"} through your gateway.</div>
               </div>
@@ -519,6 +539,15 @@ export default function App() {
     )}
     {searchOpen && <SearchPalette onOpen={openChat} onClose={() => setSearchOpen(false)} />}
     {sheetOpen && <ShortcutsSheet onClose={() => setSheetOpen(false)} />}
+    {library && (
+      <PromptLibrary
+        onInsert={applyPrompt}
+        onClose={() => { setLibrary(false); insertText(""); }}
+        onManage={() => { setLibrary(false); go("settings", "prompts"); }}
+        toast={toast}
+      />
+    )}
+    {filling && <FillPrompt prompt={filling} onDone={(t) => { setFilling(null); insertText(t); }} onCancel={() => { setFilling(null); insertText(""); }} />}
     </div>
   );
 }

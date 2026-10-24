@@ -529,9 +529,13 @@ fn read_dir_sorted(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// `*.md` under `dir`; subfolders namespace the name with `:` (Claude Code convention).
-fn md_files(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
+/// Hidden entries (`.git`, `.github`) are skipped.
+pub(crate) fn md_files(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
     for p in read_dir_sorted(dir) {
         let n = file_name(&p);
+        if n.starts_with('.') {
+            continue;
+        }
         if p.is_dir() {
             md_files(&p, &format!("{prefix}{n}:"), out);
         } else if let Some(stem) = n.strip_suffix(".md") {
@@ -947,13 +951,13 @@ pub fn parse_spec(spec: &str) -> Result<(String, Option<String>)> {
     if let Some(gh) = gh {
         return Ok((format!("https://github.com/{gh}.git"), Some(gh)));
     }
-    if s.starts_with("https://") || s.starts_with("git@") || s.starts_with("ssh://") {
+    if s.starts_with("https://") || s.starts_with("git@") || s.starts_with("ssh://") || s.starts_with("file://") {
         return Ok((spec.trim().to_string(), None));
     }
     bail!("Enter a GitHub repository as owner/repo, or a git URL")
 }
 
-fn norm_subdir(s: &str) -> Result<Option<String>> {
+pub(crate) fn norm_subdir(s: &str) -> Result<Option<String>> {
     let t = s.trim().replace('\\', "/");
     let t = t.trim_start_matches("./").trim_matches('/');
     if t.split('/').any(|c| c == "..") {
