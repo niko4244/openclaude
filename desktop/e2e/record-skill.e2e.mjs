@@ -2,6 +2,7 @@
 // microphone), have a vision model on the gateway write a SKILL.md, save it, and find it in the
 // "/" menu. Also checks that Cancel deletes a recording and that no frames are left after saving.
 //   OPENCLAUDE_LITELLM_KEY=... OC_RECORD_MODEL=gemma4-local node e2e/record-skill.e2e.mjs [exe]
+//   (or OC_RECORD_MODEL=ollama::gemma4-12b-64k:latest to bypass the gateway)
 import { chromium } from "playwright-core";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
@@ -42,8 +43,12 @@ async function startRecording() {
 try {
   await ui.waitForSelector(".sidebar");
   await call(ui, "set_setting", { key: "record_mic", value: "false" }); // typed narration only
+  // OC_RECORD_MODEL=ollama::<model> goes straight to local Ollama instead of the gateway.
+  if (model.startsWith("ollama::")) {
+    await call(ui, "provider_save", { provider: { id: "ollama", name: "Ollama (local)", base_url: "http://127.0.0.1:11434/v1", preset: "ollama", enabled: true }, apiKey: null });
+  }
   const models = await call(ui, "list_models", { refresh: true });
-  record("vision model is on the gateway", models.some((m) => m.id === model), model);
+  record("vision model is in the catalog", models.some((m) => m.id === model), model);
 
   // 1. Cancel: the indicator shows a live recording, Cancel deletes it
   let bar = await startRecording();

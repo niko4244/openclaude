@@ -85,6 +85,17 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
+## Record a skill (branch `feat/record-skill`)
+- **What:** Cowork-style "Record a skill". Composer tools menu → Record a skill → the main window minimizes and a small always-on-top indicator (`recorder` window) records the primary screen. Narrate by microphone (setting `record_mic`) or type notes in the indicator; Stop opens a review dialog in the main window; the chosen vision model (setting `record_model`, default `gemma4-local`) drafts a SKILL.md you edit and save.
+- **Code:**
+  - `src-tauri/src/recorder.rs`: sampler (64x36 luma fingerprints; visible change ≥1% of pixels is kept at once, smaller changes every 2 s, ≤0.2% is a duplicate; cap 60 thins the most redundant interior frame), session (one at a time, static), prompt, draft parsing, `write_skill`, `register`.
+  - `computer.rs` now exposes `grab`/`fit`/`png` for reuse. `plugins.rs` has `reindex()`.
+  - `shell.rs` `open_recorder`/`close_recorder`. The indicator uses `content_protected(true)` (WDA_EXCLUDEFROMCAPTURE), so it is not in its own frames, and is on the window-state denylist.
+  - Commands `record_*` in `lib.rs`; UI `components/RecorderBar.tsx` (indicator) and `components/RecordSkillDialog.tsx` (review).
+- **Files:** frames in `<data>/recordings/<id>/` (deleted on save, cancel, discard, when the indicator window is destroyed while recording, and at app start). Skills in `<data>/recorded-skills/skills/<name>/SKILL.md`, registered once as the user-scope plugin `recorded-skills`.
+- **Test:** `node e2e/record-skill.e2e.mjs` (13/13 twice with gemma4-local through the gateway; generation took 152 s and 177 s). If the gateway's local models are down, `OC_RECORD_MODEL=ollama::gemma4-12b-64k:latest` makes the E2E add the direct Ollama provider. Unit tests: `cargo test --lib record` (10).
+- **Gotchas:** a cold gemma4 load takes about 2 minutes, so warm it first. The E2E uses typed notes, so the microphone path is untested live (it reuses `voice::transcribe`). Recorded skills reach chat (the "/" menu, skills__search / skills__load) but not the Code tab CLI, because user-scope plugins are not passed as `--plugin-dir`.
+
 ## Next steps (in order)
 1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.
 2. Visual: compare against reference screenshots once Nik drops them into `docs/parity/reference/`.

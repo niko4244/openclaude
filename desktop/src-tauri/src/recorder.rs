@@ -226,7 +226,7 @@ Reply with only the skill file, in exactly this shape:
 name: short-kebab-case-name
 description: One or two sentences on what the skill does and when to use it.
 ---
-# Title
+# <the task in a few words>
 
 ## Inputs
 - what the user has to provide each time (or: None)
