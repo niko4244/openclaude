@@ -225,6 +225,10 @@ export const api = {
 
   pluginsList: () => invoke<PluginView[]>("plugins_list"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
+  providerPresets: () => invoke<ProviderPreset[]>("provider_presets"),
+  providersList: () => invoke<ProviderView[]>("providers_list"),
+  providerSave: (provider: ProviderConfig, apiKey: string | null) => invoke<void>("provider_save", { provider, apiKey }),
+  providerRemove: (id: string) => invoke<void>("provider_remove", { id }),
   devicesInfo: () => invoke<DeviceInventory>("devices_info"),
   deviceBoot: (avd: string) => invoke<void>("device_boot", { avd }),
   deviceCreate: (name: string, image: string, device: string) => invoke<void>("device_create", { name, image, device }),
@@ -302,3 +306,6 @@ export type DeviceInventory = {
   avds: string[];
   images: string[];
 };
+export type ProviderPreset = { id: string; name: string; base_url: string; needs_key: boolean };
+export type ProviderConfig = { id: string; name: string; base_url: string; preset: string | null; enabled: boolean };
+export type ProviderView = ProviderConfig & { has_key: boolean; models: number; status: GatewayStatus | null };

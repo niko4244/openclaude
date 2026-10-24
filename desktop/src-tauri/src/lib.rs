@@ -5,6 +5,7 @@ mod chrome_bridge;
 mod computer;
 mod mcp_oauth;
 mod pdf;
+mod providers;
 mod plugins;
 mod voice;
 mod db;
@@ -54,7 +55,18 @@ async fn list_models(state: State<'_, Arc<AppState>>, refresh: bool) -> Res<Vec<
         }
     }
     let gw = state.gateway.read().await.clone();
-    let models = gw.models().await.map_err(e)?;
+    let list = providers::load(&state.db.lock().unwrap());
+    let (gateway_models, (provider_models, _)) = tokio::join!(gw.models(), providers::catalog(&list));
+    // The gateway may be offline while a direct provider still works.
+    let mut models = match gateway_models {
+        Ok(m) => m,
+        Err(err) if !provider_models.is_empty() => {
+            eprintln!("gateway catalog: {err}");
+            vec![]
+        }
+        Err(err) => return Err(e(err)),
+    };
+    models.extend(provider_models);
     *state.models.write().await = models.clone();
     Ok(models)
 }
@@ -91,7 +103,9 @@ async fn set_gateway_settings(state: State<'_, Arc<AppState>>, base_url: String,
 #[tauri::command]
 async fn probe_model(state: State<'_, Arc<AppState>>, model: String) -> Res<probe::ProbeReport> {
     let gw = state.gateway.read().await.clone();
-    let rep = probe::probe(&gw, &model).await;
+    let (gw, wire) = providers::route(&state.db.lock().unwrap(), &gw, &model);
+    let mut rep = probe::probe(&gw, &wire).await;
+    rep.model = model.clone();
     state.db.lock().unwrap().set_setting(&format!("probe:{model}"), &serde_json::to_string(&rep).map_err(e)?).map_err(e)?;
     Ok(rep)
 }
@@ -749,13 +763,14 @@ async fn code_start(
     let setting = state.db.lock().unwrap().get_setting("openclaude_cli_path");
     let cli = agent::locate_cli(setting).ok_or("OpenClaude CLI not found. Set OPENCLAUDE_BIN or install @gitlawb/openclaude.")?;
     let gw = state.gateway.read().await.clone();
+    let (gw, model) = providers::route(&state.db.lock().unwrap(), &gw, &model);
     let plugin_dirs = state.plugins.cli_plugin_dirs();
     let id = db::new_id();
     state
         .code
         .start(
             id.clone(),
-            agent::StartArgs { cli: &cli, cwd: &dir, model: &model, permission_mode: &permission_mode, gateway_base: &gw.base_url, api_key: gw.api_key.as_deref(), plugin_dirs: &plugin_dirs },
+            agent::StartArgs { cli: &cli, cwd: &dir, model: &model, permission_mode: &permission_mode, openai_base: &gw.openai_base(), api_key: gw.api_key.as_deref(), plugin_dirs: &plugin_dirs },
             on_event,
         )
         .await
@@ -790,6 +805,55 @@ async fn git_status(state: State<'_, Arc<AppState>>, cwd: String) -> Res<agent::
 async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<String>) -> Res<String> {
     let dir = check_workspace(&state, &cwd)?;
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
+}
+
+// ---------- model providers (any OpenAI-compatible endpoint)
+
+#[tauri::command]
+fn provider_presets() -> Vec<providers::Preset> {
+    providers::PRESETS.to_vec()
+}
+
+#[tauri::command]
+async fn providers_list(state: State<'_, Arc<AppState>>) -> Res<Vec<providers::ProviderView>> {
+    let list = providers::load(&state.db.lock().unwrap());
+    Ok(providers::catalog(&list).await.1)
+}
+
+/// Adds or updates a provider. `api_key`: None keeps the stored key, "" removes it.
+#[tauri::command]
+async fn provider_save(state: State<'_, Arc<AppState>>, provider: providers::Provider, api_key: Option<String>) -> Res<()> {
+    if !providers::valid_id(&provider.id) {
+        return Err("Provider id: lowercase letters, digits and dashes (max 32)".into());
+    }
+    if !providers::valid_base_url(&provider.base_url) {
+        return Err("Base URL must be an http(s) URL, like https://api.openai.com/v1".into());
+    }
+    if let Some(k) = api_key {
+        providers::set_key(&provider.id, k.trim()).map_err(e)?;
+    }
+    {
+        let db = state.db.lock().unwrap();
+        let mut list = providers::load(&db);
+        list.retain(|p| p.id != provider.id);
+        list.push(provider);
+        providers::save(&db, &list).map_err(e)?;
+    }
+    state.models.write().await.clear();
+    Ok(())
+}
+
+#[tauri::command]
+async fn provider_remove(state: State<'_, Arc<AppState>>, id: String) -> Res<()> {
+    {
+        let db = state.db.lock().unwrap();
+        let mut list = providers::load(&db);
+        list.retain(|p| p.id != id);
+        providers::save(&db, &list).map_err(e)?;
+    }
+    let _ = providers::set_key(&id, "");
+    state.models.write().await.clear();
+    Ok(())
 }
 
 // ---------- Android devices and emulators
@@ -1426,6 +1490,10 @@ pub fn run() {
             plugin_context_preview,
             sync_status,
             devices_info,
+            provider_presets,
+            providers_list,
+            provider_save,
+            provider_remove,
             device_boot,
             device_create,
             sync_now,

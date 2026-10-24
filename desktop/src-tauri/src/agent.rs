@@ -130,7 +130,8 @@ pub struct StartArgs<'a> {
     pub cwd: &'a Path,
     pub model: &'a str,
     pub permission_mode: &'a str,
-    pub gateway_base: &'a str,
+    /// OpenAI-compatible base URL including its version path (gateway `/v1` or a provider's base).
+    pub openai_base: &'a str,
     pub api_key: Option<&'a str>,
     /// Enabled plugins, loaded by the CLI itself (all hook types run there).
     pub plugin_dirs: &'a [PathBuf],
@@ -150,7 +151,7 @@ pub fn build_command(a: &StartArgs) -> Command {
     }
     c.current_dir(a.cwd)
         .env("CLAUDE_CODE_USE_OPENAI", "1")
-        .env("OPENAI_BASE_URL", format!("{}/v1", a.gateway_base.trim_end_matches('/')))
+        .env("OPENAI_BASE_URL", a.openai_base.trim_end_matches('/'))
         .env("OPENAI_MODEL", a.model)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -552,7 +553,7 @@ mod tests {
         let dir = tempfile::tempdir_in(base).unwrap();
         std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
         let out = run_headless(
-            StartArgs { cli: &cli, cwd: dir.path(), model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key), plugin_dirs: &[] },
+            StartArgs { cli: &cli, cwd: dir.path(), model: "coder-local", permission_mode: "default", openai_base: "http://127.0.0.1:4000/v1", api_key: Some(&key), plugin_dirs: &[] },
             "Use the Write tool to create notes.txt containing the word ready. Then run the shell command `mkdir made_by_shell`. Then stop.",
             std::time::Duration::from_secs(300),
             |t, i| allow_in_folder(dir.path(), t, i),
@@ -589,7 +590,7 @@ mod tests {
             cwd: Path::new("."),
             model: "coder-local",
             permission_mode: "acceptEdits",
-            gateway_base: "http://127.0.0.1:4000/",
+            openai_base: "http://127.0.0.1:4000/v1/",
             api_key: Some("k"),
             plugin_dirs: &[PathBuf::from("p1"), PathBuf::from("p2")],
         };
@@ -609,7 +610,7 @@ mod tests {
     }
 
     fn args_for(mode: &str) -> Vec<String> {
-        let a = StartArgs { cli: Path::new("cli.mjs"), cwd: Path::new("."), model: "m", permission_mode: mode, gateway_base: "http://x", api_key: None, plugin_dirs: &[] };
+        let a = StartArgs { cli: Path::new("cli.mjs"), cwd: Path::new("."), model: "m", permission_mode: mode, openai_base: "http://x/v1", api_key: None, plugin_dirs: &[] };
         build_command(&a).as_std().get_args().map(|s| s.to_string_lossy().into()).collect()
     }
 
@@ -657,7 +658,7 @@ mod tests {
         });
         let cli = locate_cli(None).expect("openclaude cli.mjs");
         let sessions = CodeSessions::default();
-        let a = StartArgs { cli: &cli, cwd: &repo, model: "coder-local", permission_mode: "default", gateway_base: "http://127.0.0.1:4000", api_key: Some(&key), plugin_dirs: &[] };
+        let a = StartArgs { cli: &cli, cwd: &repo, model: "coder-local", permission_mode: "default", openai_base: "http://127.0.0.1:4000/v1", api_key: Some(&key), plugin_dirs: &[] };
         sessions.start("s1".into(), a, ch).await.unwrap();
         sessions.send("s1", "Create a file named hello.txt containing exactly the word hi. Use the Write tool.").await.unwrap();
 

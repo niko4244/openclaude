@@ -1,4 +1,5 @@
-//! LiteLLM gateway client: catalog discovery and streaming chat completions.
+//! LiteLLM gateway client (and any OpenAI-compatible endpoint): catalog discovery and streaming
+//! chat completions.
 //!
 //! Metadata is reported exactly as the gateway returns it; anything the gateway
 //! does not declare stays `None` ("unknown") rather than being guessed.
@@ -13,6 +14,9 @@ pub struct Gateway {
     pub base_url: String,
     pub api_key: Option<String>,
     http: reqwest::Client,
+    /// An OpenAI-compatible base that already includes its version path (`.../v1`); no LiteLLM extras.
+    compat: bool,
+    headers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -157,11 +161,25 @@ impl Gateway {
             .connect_timeout(Duration::from_secs(10))
             .build()
             .expect("http client");
-        Self { base_url: base_url.trim_end_matches('/').to_string(), api_key, http }
+        Self { base_url: base_url.trim_end_matches('/').to_string(), api_key, http, compat: false, headers: vec![] }
+    }
+
+    /// Any OpenAI-compatible API (`base_url` like `https://api.openai.com/v1`).
+    pub fn openai_compatible(base_url: &str, api_key: Option<String>, headers: Vec<(String, String)>) -> Self {
+        Self { compat: true, headers, ..Self::new(base_url, api_key) }
+    }
+
+    /// Base URL for OpenAI clients (the Code tab's CLI).
+    pub fn openai_base(&self) -> String {
+        if self.compat { self.base_url.clone() } else { format!("{}/v1", self.base_url) }
     }
 
     fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let r = self.http.request(method, format!("{}{}", self.base_url, path));
+        let path = if self.compat { path.strip_prefix("/v1").unwrap_or(path) } else { path };
+        let mut r = self.http.request(method, format!("{}{}", self.base_url, path));
+        for (k, v) in &self.headers {
+            r = r.header(k, v);
+        }
         match &self.api_key {
             Some(k) if !k.is_empty() => r.bearer_auth(k),
             _ => r,
@@ -171,7 +189,7 @@ impl Gateway {
     pub async fn status(&self) -> GatewayStatus {
         let t = Instant::now();
         let live = self
-            .req(reqwest::Method::GET, "/health/liveliness")
+            .req(reqwest::Method::GET, if self.compat { "/models" } else { "/health/liveliness" })
             .timeout(Duration::from_secs(5))
             .send()
             .await;
@@ -186,8 +204,17 @@ impl Gateway {
             Ok(r) if r.status().is_success() => {
                 st.reachable = true;
                 st.latency_ms = Some(t.elapsed().as_millis() as u64);
+                if self.compat {
+                    st.authenticated = true;
+                    return st;
+                }
             }
-            Ok(r) => st.error = Some(format!("liveliness returned HTTP {}", r.status())),
+            Ok(r) if self.compat && matches!(r.status().as_u16(), 401 | 403) => {
+                st.reachable = true;
+                st.error = Some(format!("the provider rejected the API key (HTTP {})", r.status()));
+                return st;
+            }
+            Ok(r) => st.error = Some(format!("{} returned HTTP {}", if self.compat { "/models" } else { "liveliness" }, r.status())),
             Err(e) => st.error = Some(format!("gateway unreachable: {e}")),
         }
         if st.reachable {
@@ -205,8 +232,8 @@ impl Gateway {
 
     /// Full catalog: `/model/info` when allowed (rich metadata), else `/v1/models` ids only.
     pub async fn models(&self) -> anyhow::Result<Vec<ModelEntry>> {
-        let info = self.req(reqwest::Method::GET, "/model/info").timeout(Duration::from_secs(20)).send().await;
-        if let Ok(r) = info {
+        let info = if self.compat { None } else { Some(self.req(reqwest::Method::GET, "/model/info").timeout(Duration::from_secs(20)).send().await) };
+        if let Some(Ok(r)) = info {
             if r.status().is_success() {
                 let v: Value = r.json().await?;
                 let mut out: Vec<ModelEntry> = v

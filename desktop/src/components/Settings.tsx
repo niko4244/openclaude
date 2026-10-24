@@ -4,14 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type ProviderPreset, type ProviderView, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
-import { Blocks, Cpu, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
+import { Blocks, Cloud, Cpu, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
 
-type Tab = "general" | "gateway" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "about";
+type Tab = "general" | "gateway" | "providers" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "about";
 const GROUPS: [string, [Tab, string, LucideIcon][]][] = [
-  ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["about", "About", Info]]],
+  ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["providers", "Providers", Cloud], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["about", "About", Info]]],
   ["Customize", [["connectors", "Connectors (MCP)", Blocks], ["plugins", "Plugins", Plug], ["extensions", "Extensions", Package]]],
 ];
 
@@ -74,6 +74,7 @@ export function Settings({
         <div className="settings-body">
         {tab === "general" && <General theme={theme} onTheme={onTheme} toast={toast} onProfileChanged={onProfileChanged} />}
         {tab === "gateway" && <Gateway onChanged={onGatewayChanged} toast={toast} />}
+        {tab === "providers" && <ProvidersTab toast={toast} onModelsChanged={onModelsChanged} />}
         {tab === "models" && <Models models={models} onRefresh={onModelsChanged} />}
         {tab === "connectors" && <Connectors toast={toast} />}
         {tab === "plugins" && <PluginsTab toast={toast} />}
@@ -750,7 +751,7 @@ function PluginsTab({ toast }: { toast: (m: string) => void }) {
       </div>
       {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "18px 0 6px" }}>
-        <h3 style={{ margin: 0, flex: 1 }}>Installed{list ? ` (${list.length})` : ""}</h3>
+        <h2 className="section-h" style={{ margin: 0, flex: 1 }}>Installed{list ? ` (${list.length})` : ""}</h2>
         <button className="btn" disabled={!!busy} onClick={() => void run("preview", async () => setPreview(await api.pluginContextPreview()))}>{busy === "preview" ? "Running hooks…" : "Preview chat context"}</button>
         <button className="btn" disabled={!!busy} onClick={() => void run("updates", async () => {
           const n = await api.pluginsUpdateAll();
@@ -857,5 +858,77 @@ function DevicesField({ toast }: { toast: (m: string) => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+function ProvidersTab({ toast, onModelsChanged }: { toast: (m: string) => void; onModelsChanged: () => Promise<void> }) {
+  const [list, setList] = useState<ProviderView[] | null>(null);
+  const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const blank = { id: "", name: "", base_url: "", preset: null as string | null, enabled: true };
+  const [form, setForm] = useState(blank);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => void api.providersList().then(setList);
+  useEffect(() => { load(); void api.providerPresets().then(setPresets); }, []);
+  const choose = (id: string) => {
+    const p = presets.find((x) => x.id === id);
+    setForm(p ? { id: p.id, name: p.name, base_url: p.base_url, preset: p.id, enabled: true } : { ...blank, preset: null });
+  };
+  const save = async (cfg = form, apiKey: string | null = key || null) => {
+    setBusy(true); setErr(null);
+    try {
+      await api.providerSave(cfg, apiKey);
+      setForm(blank); setKey("");
+      await onModelsChanged();
+      load();
+      toast(`Saved ${cfg.name || cfg.id}`);
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  };
+  const preset = presets.find((p) => p.id === form.preset);
+  return (
+    <>
+      <p className="muted">Use models from any OpenAI-compatible provider next to your gateway: clouds (OpenAI, Anthropic, Gemini, OpenRouter, Groq…) or local servers (Ollama, LM Studio, llama.cpp, vLLM). They appear in the model picker as <span className="mono">provider::model</span>. Keys are stored in Windows Credential Manager and never shown again.</p>
+      {list?.map((p) => (
+        <div className="card" key={p.id} data-provider={p.id}>
+          <div className="card-head">
+            <span className={`dot ${!p.enabled ? "" : p.models > 0 ? "ok" : p.status?.reachable ? "warn" : "err"}`} />
+            <span className="name">{p.name}</span>
+            <span className="badge">{p.id}</span>
+            {p.has_key && <span className="badge local">key stored</span>}
+          </div>
+          <div className="muted mono" style={{ margin: "4px 0" }}>{p.base_url}</div>
+          <div className="muted">{!p.enabled ? "Disabled" : p.models > 0 ? `${p.models} models` : p.status?.error ?? "No models listed"}</div>
+          <div className="plugin-switches">
+            <label><input type="checkbox" checked={p.enabled} onChange={(e) => void save({ id: p.id, name: p.name, base_url: p.base_url, preset: p.preset, enabled: e.target.checked }, null)} /> Enabled</label>
+          </div>
+          <div className="plugin-actions">
+            <button className="btn" onClick={() => { setForm({ id: p.id, name: p.name, base_url: p.base_url, preset: p.preset, enabled: p.enabled }); setKey(""); }}>Edit</button>
+            <button className="btn" disabled={busy} onClick={async () => { await api.providerRemove(p.id); await onModelsChanged(); load(); toast(`Removed ${p.name}`); }}>Remove</button>
+          </div>
+        </div>
+      ))}
+      {list?.length === 0 && <div className="muted" style={{ margin: "8px 0" }}>No providers yet. Your gateway's models are always available.</div>}
+      <h2 className="section-h">{list?.some((p) => p.id === form.id) ? `Edit ${form.name}` : "Add a provider"}</h2>
+      <div className="field">
+        <label htmlFor="pv-preset">Preset</label>
+        <select id="pv-preset" value={form.preset ?? ""} onChange={(e) => choose(e.target.value)}>
+          <option value="">Custom (any OpenAI-compatible URL)</option>
+          {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      <div className="field"><label htmlFor="pv-name">Name</label><input id="pv-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="My provider" /></div>
+      <div className="field"><label htmlFor="pv-id">Id (prefix in the model picker)</label><input id="pv-id" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} placeholder="my-provider" /></div>
+      <div className="field"><label htmlFor="pv-url">Base URL</label><input id="pv-url" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://api.example.com/v1" /></div>
+      <div className="field">
+        <label htmlFor="pv-key">API key{preset && !preset.needs_key ? " (not needed for local servers)" : ""}</label>
+        <input id="pv-key" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={list?.find((p) => p.id === form.id)?.has_key ? "•••••••• (leave blank to keep)" : "sk-…"} />
+      </div>
+      {err && <div className="error-box">{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button className="btn primary" disabled={busy || !form.id || !form.base_url} onClick={() => void save()}>{busy ? "Saving…" : "Save provider"}</button>
+        {form.id && <button className="btn" onClick={() => { setForm(blank); setKey(""); }}>Clear</button>}
+      </div>
+    </>
   );
 }

@@ -289,7 +289,10 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         system.push_str("\n\n");
         system.push_str(plugin_ctx.trim());
     }
-    let gateway = state.gateway.read().await.clone();
+    let (gateway, wire_model) = {
+        let gw = state.gateway.read().await.clone();
+        crate::providers::route(&state.db.lock().unwrap(), &gw, &args.model)
+    };
 
     let mut retried_empty = false;
     for _step in 0..MAX_STEPS {
@@ -298,7 +301,7 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         let wire = match compaction_cut(&history, budget) {
             None => to_wire(&system, &history),
             Some(cut) => {
-                let summary = summary_for(state, &gateway, &args.model, cid, &history[..cut]).await?;
+                let summary = summary_for(state, &gateway, &wire_model, cid, &history[..cut]).await?;
                 let _ = ch.send(ChatEvent::Compacted { summarized: cut });
                 let sys = format!("{system}\n\nSummary of the earlier part of this conversation (older turns were compacted to fit the context window):\n{summary}");
                 to_wire(&sys, &history[cut..])
@@ -306,7 +309,7 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         };
         let ch2 = ch.clone();
         let res = gateway
-            .stream_chat(&args.model, &wire, Some(&tools), extra.as_ref(), &run.cancel, |d| {
+            .stream_chat(&wire_model, &wire, Some(&tools), extra.as_ref(), &run.cancel, |d| {
                 let _ = ch2.send(match d {
                     Delta::Text { text } => ChatEvent::Text { text },
                     Delta::Reasoning { text } => ChatEvent::Reasoning { text },

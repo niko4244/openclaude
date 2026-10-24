@@ -182,13 +182,14 @@ async fn run_folder_task(state: Arc<AppState>, app: AppHandle, task: Task, ws: S
             Err(e) => Err(e),
             Ok(cli) => {
                 let gw = state.gateway.read().await.clone();
+                let (gw, model) = crate::providers::route(&state.db.lock().unwrap(), &gw, &task.model);
                 let plugin_dirs = state.plugins.cli_plugin_dirs();
                 let args = crate::agent::StartArgs {
                     cli: &cli,
                     cwd: std::path::Path::new(&ws),
-                    model: &task.model,
+                    model: &model,
                     permission_mode: "default",
-                    gateway_base: &gw.base_url,
+                    openai_base: &gw.openai_base(),
                     api_key: gw.api_key.as_deref(),
                     plugin_dirs: &plugin_dirs,
                 };

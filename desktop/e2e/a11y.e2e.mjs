@@ -145,7 +145,7 @@ try {
   await step("settings", async () => {
     await page.keyboard.press("Control+,");
     await page.waitForSelector('button[role="tab"]', { timeout: 5000 });
-    for (const tab of ["General", "Gateway", "Models", "Connectors", "Extensions", "Projects", "About"]) {
+    for (const tab of ["General", "Gateway", "Providers", "Models", "Connectors", "Plugins", "Extensions", "Projects", "About"]) {
       const t = page.locator(`button[role="tab"]:has-text("${tab}")`).first();
       if (!(await t.count())) { stateLog.push({ state: `settings:${tab}`, error: "tab not found" }); continue; }
       await t.click();
