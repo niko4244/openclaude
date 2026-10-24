@@ -50,7 +50,7 @@ column was compared by tokens (§1b), not pixels.
 | First nav row | "New", center y≈68 | "New chat", center y≈68 | Matches |
 | Nav rows | 32 px, 8 px side inset | 32 px (+1 px gap), 8 px side inset | Matches |
 | Footer rows | 32 px, 8 px inset | Account row (avatar, name, gateway status) | Content differs by design (gateway status instead of account plan) |
-| Main background vs sidebar | sidebar ≈ #fafaf9, main ≈ #fcfcfb (light) | Own palette, same relationship (sidebar a step darker than main) | Palette intentionally original |
+| Neutral surfaces (sampled pixels) | light: sidebar #fbfbf9, main #fcfcfb, divider #e2e2e1; dark: sidebar #111111, main #151515, divider #292929 | light: #f9f9f6, #fcfcfa, #e4e3de; dark: #121211, #161615, #2b2b29 (max 3 levels per channel) | Same lightness; our own faint warm tint, teal accent, logo and type stay original |
 | Chat title | Centered in the title row | Centered in the title row | Matches |
 | Settings | Centered modal (about 1024x768, 16 px inset) over the dimmed app; left nav with search and groups (Settings / Customize) and icons; close x; label-left / control-right rows with hairlines; switches; theme as a 3-icon segmented control | Same structure: modal over the page you came from, grouped icon nav with filter, close x, hairline rows, switches, segmented theme control | Our sections differ (gateway, models, plugins instead of account/billing) |
 | Pages (Tasks etc.) | Full content width, 40 px padding, serif title about 26 px at y≈72, actions right | Full width, 40 px padding, 26 px serif title at y≈76, actions right | Matches |
