@@ -225,6 +225,9 @@ export const api = {
 
   pluginsList: () => invoke<PluginView[]>("plugins_list"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
+  devicesInfo: () => invoke<DeviceInventory>("devices_info"),
+  deviceBoot: (avd: string) => invoke<void>("device_boot", { avd }),
+  deviceCreate: (name: string, image: string, device: string) => invoke<void>("device_create", { name, image, device }),
   syncNow: () => invoke<SyncStatus>("sync_now"),
   syncChooseFolder: () => invoke<SyncStatus>("sync_choose_folder"),
   syncOff: () => invoke<SyncStatus>("sync_off"),
@@ -293,3 +296,9 @@ export type PluginOffer = { repo: string; marketplace: string | null; items: { n
 export type PluginCandidate = { key: string; name: string; origin: string; local: string; github: PluginSource | null; user_scope: boolean; imported: boolean };
 export type SlashCommand = { kind: "skill" | "command" | "agent"; name: string; plugin: string; description: string; arg_hint: string | null; path: string };
 export type SyncStatus = { folder: string | null; device_name: string; last_at: number; devices: string[]; error: string | null };
+export type DeviceInventory = {
+  sdk: { adb: string; emulator: string | null; avdmanager: string | null; root: string | null } | null;
+  devices: { serial: string; state: string; model: string | null; emulator: boolean }[];
+  avds: string[];
+  images: string[];
+};

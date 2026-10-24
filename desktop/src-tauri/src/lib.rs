@@ -8,6 +8,7 @@ mod pdf;
 mod plugins;
 mod voice;
 mod db;
+mod devices;
 mod extensions;
 mod gateway;
 mod knowledge;
@@ -122,7 +123,7 @@ fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> R
 fn check_ui_setting(key: &str, value: &str) -> Res<()> {
     const UI_KEYS: &[&str] = &[
         "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
-        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled",
+        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled", "android_devices_enabled",
     ];
     if key.starts_with("feedback:") {
         return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
@@ -791,6 +792,25 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- Android devices and emulators
+
+#[tauri::command]
+async fn devices_info() -> devices::Inventory {
+    devices::inventory().await
+}
+
+#[tauri::command]
+async fn device_boot(avd: String) -> Res<()> {
+    let sdk = devices::locate().ok_or("adb was not found")?;
+    devices::boot(&sdk, &avd).map_err(e)
+}
+
+#[tauri::command]
+async fn device_create(name: String, image: String, device: String) -> Res<()> {
+    let sdk = devices::locate().ok_or("adb was not found")?;
+    devices::create(&sdk, &name, &image, &device).await.map_err(e)
+}
+
 // ---------- sync (local-first, through a folder the user's cloud drive syncs)
 
 static SYNC: std::sync::LazyLock<std::sync::Mutex<sync::Memory>> = std::sync::LazyLock::new(Default::default);
@@ -1405,6 +1425,9 @@ pub fn run() {
             slash_expand,
             plugin_context_preview,
             sync_status,
+            devices_info,
+            device_boot,
+            device_create,
             sync_now,
             sync_choose_folder,
             sync_off,

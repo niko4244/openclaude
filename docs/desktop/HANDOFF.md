@@ -67,6 +67,11 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - This matches the reference shell rendered from `resources/ion-dist` (VISUAL_BASELINES §1c).
   - The quick-entry and voice E2E checks now verify the feature, not the model's exact word.
   - Gate: desktop 38/38, a11y 0, artifacts 4/4.
+- **Android devices (row 25, `src-tauri/src/devices.rs`):**
+  - Settings → General → Android devices and emulators: SDK/adb discovery, devices + AVDs, create/boot.
+  - Approval-gated `device__*` tools, treated like computer use.
+  - Unit tests use a stub adb. There's no live E2E: this machine has `~/tools/adb` but no Emulator, system image or device. Installing the Android Emulator is a multi-GB download, so ask Nik first.
+  - The Office add-in bridge and the BLE buddy are not reproducible. Microsoft 365 connectors are available through the directory.
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 

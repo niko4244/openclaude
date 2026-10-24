@@ -266,6 +266,9 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         if !state.plugins.index().is_empty() {
             tools.extend(crate::plugins::tool_defs());
         }
+        if state.db.lock().unwrap().get_setting("android_devices_enabled").as_deref() == Some("true") && crate::devices::locate().is_some() {
+            tools.extend(crate::devices::tool_defs());
+        }
         tools
     } else {
         vec![]
@@ -470,14 +473,18 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
     // Computer use and the user's own Chrome: built-in, never via MCP, never in background runs,
     // never permanently pre-approved (they act with the user's screen / logged-in sessions).
     let is_chrome = call.name.starts_with("chrome__");
-    let is_computer = call.name.starts_with("computer__") || is_chrome;
+    let is_device = call.name.starts_with("device__");
+    let is_computer = call.name.starts_with("computer__") || is_chrome || is_device;
     if is_computer && !ch.interactive {
         return ToolOutcome::Done("Computer use requires an interactive chat.".into(), true, None);
     }
     if is_chrome && state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() != Some("true") {
         return ToolOutcome::Done("The Chrome extension is disabled in Settings.".into(), true, None);
     }
-    if is_computer && !is_chrome && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
+    if is_device && state.db.lock().unwrap().get_setting("android_devices_enabled").as_deref() != Some("true") {
+        return ToolOutcome::Done("Android device tools are disabled in Settings.".into(), true, None);
+    }
+    if is_computer && !is_chrome && !is_device && state.db.lock().unwrap().get_setting("computer_use_enabled").as_deref() != Some("true") {
         return ToolOutcome::Done("Computer use is disabled in Settings.".into(), true, None);
     }
     // Browser tools drive a dedicated browser profile; background runs need "Always allow" like any tool.
@@ -487,6 +494,8 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
     }
     let (server, tool) = if is_chrome {
         ("your Chrome".to_string(), call.name.trim_start_matches("chrome__").to_string())
+    } else if is_device {
+        ("Android device".to_string(), call.name.trim_start_matches("device__").to_string())
     } else if is_computer {
         ("computer".to_string(), call.name.trim_start_matches("computer__").to_string())
     } else if is_browser {
@@ -544,6 +553,18 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
             r = crate::browser::execute(&call.name, &args, &profile) => match r {
                 Ok(o) => ToolOutcome::Done(cap(o.text), false, o.image_data_url),
                 Err(e) => ToolOutcome::Done(format!("Browser error: {e}"), true, None),
+            },
+            _ = run.cancel.notified() => ToolOutcome::Cancelled,
+        };
+    }
+    if is_device {
+        let Some(sdk) = crate::devices::locate() else {
+            return ToolOutcome::Done("adb was not found. Install Android SDK Platform-Tools (or Android Studio).".into(), true, None);
+        };
+        return tokio::select! {
+            r = crate::devices::execute(&sdk, &call.name, &args) => match r {
+                Ok(o) => ToolOutcome::Done(cap(o.text), false, o.image_data_url),
+                Err(e) => ToolOutcome::Done(format!("Device error: {e}"), true, None),
             },
             _ = run.cancel.notified() => ToolOutcome::Cancelled,
         };

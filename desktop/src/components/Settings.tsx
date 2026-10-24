@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
 
@@ -133,6 +133,7 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
       </div>
       <SttField toast={toast} />
       <SyncField toast={toast} />
+      <DevicesField toast={toast} />
       <ComputerUseField />
       <BrowserToolsField />
       <ChromeExtensionField />
@@ -811,6 +812,41 @@ function SyncField({ toast }: { toast: (m: string) => void }) {
       <span className="help">Pick a folder your cloud drive already syncs (OneDrive, Dropbox, a network share). Chats, projects, knowledge files and a few preferences sync through it every minute; no account is involved. API keys, tool permissions and connectors stay on each device.</span>
       {st?.folder && <span className="help">This device: {st.device_name}{st.devices.length ? ` · also syncing: ${st.devices.join(", ")}` : ""}{st.last_at ? ` · last synced ${new Date(st.last_at).toLocaleTimeString()}` : ""}</span>}
       {st?.error && <div className="error-box" style={{ marginTop: 6 }}>{st.error}</div>}
+    </div>
+  );
+}
+
+function DevicesField({ toast }: { toast: (m: string) => void }) {
+  const [on, setOn] = useState(false);
+  const [inv, setInv] = useState<DeviceInventory | null>(null);
+  const [name, setName] = useState("Pixel_API");
+  const [image, setImage] = useState("");
+  const load = () => void api.devicesInfo().then((i) => { setInv(i); setImage((x) => x || i.images[0] || ""); });
+  useEffect(() => { void api.getSetting("android_devices_enabled").then((v) => setOn(v === "true")); }, []);
+  useEffect(() => { if (on) load(); }, [on]);
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("android_devices_enabled", e.target.checked ? "true" : "false"); }} /> Android devices and emulators</label>
+      <span className="help">Lets the model see and drive an Android emulator or a USB-debugging device through adb (screenshot, tap, swipe, type, keys, launch apps). Every action asks for approval (at most “for this chat”); it never runs in background tasks.</span>
+      {on && inv && (
+        <div className="card" style={{ margin: "6px 0 0" }}>
+          {!inv.sdk ? <div className="muted">adb was not found. Install Android Studio, or Android SDK Platform-Tools and the Android Emulator.</div> : (
+            <>
+              <div className="muted">adb: <span className="mono">{inv.sdk.adb}</span>{inv.sdk.emulator ? "" : " · Android Emulator not installed"}</div>
+              <div style={{ marginTop: 6 }}>{inv.devices.length ? inv.devices.map((d) => <div key={d.serial}><span className="mono">{d.serial}</span> {d.model ?? ""} <span className="badge">{d.state}</span></div>) : <span className="muted">No device online.</span>}</div>
+              {inv.avds.length > 0 && <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>{inv.avds.map((a) => <button key={a} className="btn" onClick={async () => { try { await api.deviceBoot(a); toast(`Starting ${a}…`); setTimeout(load, 15000); } catch (e) { toast(String(e)); } }}>Start {a}</button>)}</div>}
+              {inv.sdk.avdmanager && inv.images.length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <input aria-label="Virtual device name" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 140 }} />
+                  <select className="btn" aria-label="System image" value={image} onChange={(e) => setImage(e.target.value)}>{inv.images.map((i) => <option key={i} value={i}>{i.replace("system-images;", "")}</option>)}</select>
+                  <button className="btn" onClick={async () => { try { await api.deviceCreate(name, image, "pixel"); toast(`Created ${name}`); load(); } catch (e) { toast(String(e)); } }}>Create virtual device</button>
+                </div>
+              )}
+              <button className="btn" style={{ marginTop: 8 }} onClick={load}>Refresh</button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
