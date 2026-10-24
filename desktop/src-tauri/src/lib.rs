@@ -14,6 +14,7 @@ mod voice;
 mod db;
 mod diag;
 mod devices;
+mod evolution;
 mod extensions;
 mod gateway;
 mod inbox;
@@ -1636,6 +1637,32 @@ async fn voice_transcribe(state: State<'_, Arc<AppState>>, audio_b64: String, mi
     voice::transcribe(&gw, stt.as_deref(), audio, &mime, &work_dir).await.map_err(|err| format!("{err:#}"))
 }
 
+// ---------- evolution engine (feature parity)
+
+#[tauri::command]
+fn evolution_status(state: State<'_, Arc<AppState>>) -> Res<evolution::EvolutionStatus> {
+    Ok(evolution::status(&data_dir(&state)?))
+}
+
+#[tauri::command]
+async fn evolution_check(state: State<'_, Arc<AppState>>) -> Res<serde_json::Value> {
+    let dir = data_dir(&state)?;
+    tauri::async_runtime::spawn_blocking(move || evolution::run_check(&dir))
+        .await
+        .map_err(e)?
+}
+
+#[tauri::command]
+fn evolution_configure(
+    state: State<'_, Arc<AppState>>,
+    enabled: Option<bool>,
+    interval_hours: Option<u32>,
+    autonomy: Option<String>,
+) -> Res<evolution::EvolutionStatus> {
+    let dir = data_dir(&state)?;
+    evolution::configure(&dir, enabled, interval_hours, autonomy.as_deref())
+}
+
 // ---------- record a skill
 
 fn data_dir(state: &AppState) -> Res<std::path::PathBuf> {
@@ -1884,6 +1911,9 @@ pub fn run() {
                 }
             }
             tasks::start_scheduler(state.clone(), app.handle().clone());
+            // The Evolution ticker only checks "is a sweep due" every 15 minutes; it is
+            // inert without an engine checkout, a Node runtime, or consent in config.json.
+            evolution::start_ticker(data_dir.clone());
             start_plugin_updater(state.clone(), app.handle().clone());
             start_sync(state.clone(), app.handle().clone());
             if state.db.lock().unwrap().get_setting("chrome_extension_enabled").as_deref() == Some("true") {
@@ -2041,6 +2071,9 @@ pub fn run() {
             providers_list,
             provider_save,
             provider_remove,
+            evolution_status,
+            evolution_check,
+            evolution_configure,
             device_boot,
             device_create,
             device_presets,

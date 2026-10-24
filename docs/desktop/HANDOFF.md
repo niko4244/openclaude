@@ -31,6 +31,7 @@ $env:OPENCLAUDE_LITELLM_KEY = <LITELLM_MASTER_KEY from C:\Users\nikma\Brainz\inf
 node e2e/desktop.e2e.mjs            # real GUI over WebView2 CDP, live gateway; last: 32/32
 node e2e/a11y.e2e.mjs               # axe audit; exits 1 on critical/serious
 node e2e/artifact-isolation.e2e.mjs # 4/4
+node e2e/evolution.e2e.mjs          # 28/28, no model or network
 node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 ```
 
@@ -179,7 +180,13 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **CI:** `.github/workflows/claude-feature-watch.yml` runs every 6 h, commits the registry to `evolution/registry` and opens/updates a PR. It never pushes to `main` and never runs third-party code.
 - **Commands:** `bun run evolution` (CLI), `bun run evolution:check`, `bun run test:evolution`; in the app, Evolution → Check for Claude updates / Pause.
 - **Verified 2026-10-24:** engine tests 33/33, Rust lib 127 passed (5 new `evolution::` tests), `tsc -b` 0, `vite build` ok, eslint 0 errors. Live sweep: 141 signals from 8 sources, second run +0 (idempotent). Three real signals classified as `partial` with matrix-based notes; `docs/feature-parity.md` generated. REA is not installed on this machine, so `investigate` correctly returned **blocked** (exit 2). A temp-copy end-to-end run produced a ledger task, executed a real gate, and wrote a PR draft with the gate result (`ready-for-review`).
-- **Not verified:** the Evolution page was not launched in the running app (no Tauri build this session); the desktop ticker was not observed firing (it needs 15 min plus a due registry). Neither is claimed as live-tested.
+- **Real-app E2E (`e2e/evolution.e2e.mjs`, 28/28 on 2026-10-24):** three launches against a rebuilt release exe.
+  - No registry (explicit `OPENCLAUDE_EVOLUTION_DIR`): empty state, disabled Check, no Pause, no invented cards.
+  - Populated registry, no CLI: counts, 50% coverage, failed-source error, gap-first ordering, blocker + source, ledger row, read-only label, no editable controls.
+  - Engine with a stub CLI: `check --quiet --json` is what the app runs (asserted from the stub's argv and cwd), toast shows +2, the page reloads the new registry, Pause/Resume and interval/autonomy write `config.json` while preserving other keys.
+  - Runs under the shared `%TEMP%/oc-e2e.lock`; each launch gets an OS-assigned port (fixed ranges collided with an unrelated service).
+- **Accessibility (`e2e/a11y.e2e.mjs`, 2026-10-24):** the audit now scans the Evolution page in four states — empty and populated, each light and dark (34 states total, still **0** violations, exit 0). The empty state is scanned first; the audit then writes a fixture registry into the same `OPENCLAUDE_EVOLUTION_DIR` and presses Refresh, so both states come from one launch.
+- **Not verified:** the desktop ticker was not observed firing (it needs 15 minutes plus a due registry). The workflow has not run on GitHub.
 
 ## Next steps (in order)
 1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.

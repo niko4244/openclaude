@@ -19,6 +19,9 @@ let port = Number(process.env.OC_A11Y_PORT || 9433);
 const out = resolve("e2e/out");
 mkdirSync(out, { recursive: true });
 const dataDir = mkdtempSync(join(tmpdir(), "oc-a11y-"));
+// The Evolution page reads this directory. It starts empty (the empty state) and the
+// audit writes a fixture registry into it later, then presses Refresh — no relaunch.
+const evoDir = join(dataDir, "evolution");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const axeSrc = readFileSync(resolve("node_modules/axe-core/axe.min.js"), "utf8");
 
@@ -41,6 +44,7 @@ async function launch() {
     env: {
       ...process.env,
       OPENCLAUDE_DATA_DIR: dataDir,
+      OPENCLAUDE_EVOLUTION_DIR: evoDir,
       ...(KEY ? { OPENCLAUDE_LITELLM_KEY: KEY } : {}),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     },
@@ -210,6 +214,53 @@ Write a short welcome note for {{name}}.
       }
     });
   }
+
+  // Evolution: the empty state, then a populated registry, both themes.
+  await step("evolution", async () => {
+    await page.click('.nav-item[aria-label="Evolution"]');
+    await page.waitForSelector('.page h1:has-text("Evolution")', { timeout: 10000 });
+    await page.waitForSelector('.card:has-text("No feature registry on this machine")', { timeout: 10000 });
+    await scan(page, "evolution (empty)");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "evolution (empty)", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+
+    mkdirSync(evoDir, { recursive: true });
+    const at = new Date().toISOString();
+    writeFileSync(join(evoDir, "registry.json"), JSON.stringify({
+      schemaVersion: 1,
+      createdAt: at,
+      updatedAt: at,
+      lastCheck: { startedAt: at, finishedAt: at, status: "ok", added: 3, changed: 1, failed: 0, sources: 2 },
+      sources: {
+        "claude-release-notes": { status: "ok", checkedAt: at, itemCount: 69, error: null },
+        "mcp-spec-releases": { status: "failed", checkedAt: at, itemCount: 0, error: "HTTP 500" },
+      },
+      signals: [
+        { id: "sig_a", sourceId: "claude-release-notes", status: "new", featureId: null, title: "Scheduled tasks in Cowork" },
+        { id: "sig_b", sourceId: "claude-release-notes", status: "classified", featureId: "feat_b", title: "Branching" },
+      ],
+      features: [
+        { id: "feat_a", name: "Scheduled tasks in Cowork", summary: "Cowork can schedule recurring and on-demand tasks.", product: "cowork", category: "tasks", status: "announced", platforms: ["windows"], parity: { status: "missing", percent: 0, openclaudeFeature: null, notes: "", evidence: [] }, sourceUrls: ["https://example.test/release-notes"], blockers: ["No Cowork VM"], tests: [], investigation: { status: "not-started", planPath: null }, implementation: { status: "not-started" }, createdAt: at, updatedAt: at },
+        { id: "feat_b", name: "Chat branching", summary: "Edit or regenerate a turn and switch between versions.", product: "claude-desktop", category: "conversation", status: "implemented", platforms: ["windows"], parity: { status: "equivalent", percent: 100, openclaudeFeature: "Branch navigation", notes: "", evidence: [] }, sourceUrls: [], blockers: [], tests: [], investigation: { status: "not-started", planPath: null }, implementation: { status: "delivered" }, createdAt: at, updatedAt: at },
+      ],
+    }, null, 2));
+    writeFileSync(join(evoDir, "config.json"), JSON.stringify({ version: 1, enabled: true, intervalHours: 6, autonomy: "research", monitoring: { repositoryWorkflow: true, desktopApp: true } }, null, 2));
+    writeFileSync(join(evoDir, "ledger.json"), JSON.stringify({ version: 1, tasks: [{ id: "task_a", featureId: "feat_a", title: "Scheduled tasks in Cowork", status: "queued", branch: "evolution/scheduled-tasks", worktree: "C:/tmp/oc-evolution/feat_a", prDraft: null }] }, null, 2));
+    // A stub engine so the page renders its full control set (Pause, frequency,
+    // autonomy). Nothing runs it: the sweep is not due and the audit never presses it.
+    writeFileSync(join(evoDir, "cli.mjs"), "console.log(JSON.stringify({ status: 'ok', added: 0, changed: 0 }));\n");
+
+    await page.click('button[aria-label="Refresh status"]');
+    await page.waitForSelector('.card:has-text("Untriaged signals")', { timeout: 10000 });
+    await sleep(300);
+    await scan(page, "evolution (populated)");
+    await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    await sleep(300);
+    await scan(page, "evolution (populated)", "dark");
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+  });
 
   // a chat with one real exchange
   await step("chat", async () => {

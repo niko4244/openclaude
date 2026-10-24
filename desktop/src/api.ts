@@ -285,6 +285,16 @@ export const api = {
   getProbes: () => invoke<ProbeReport[]>("get_probes"),
   appInfo: () => invoke<{ version: string; username: string; data_dir: string; mcp_config: string }>("app_info"),
 
+  evolutionStatus: () => invoke<EvolutionStatus>("evolution_status"),
+  evolutionCheck: () =>
+    invoke<{ status: string; exit_code: number | null; added: number; changed: number; stderr: string; engine_dir: string }>("evolution_check"),
+  evolutionConfigure: (patch: { enabled?: boolean; intervalHours?: number; autonomy?: string }) =>
+    invoke<EvolutionStatus>("evolution_configure", {
+      enabled: patch.enabled ?? null,
+      intervalHours: patch.intervalHours ?? null,
+      autonomy: patch.autonomy ?? null,
+    }),
+
   recordStart: () => invoke<void>("record_start"),
   recordStatus: () => invoke<RecordStatus | null>("record_status"),
   recordNote: (text: string) => invoke<void>("record_note", { text }),
@@ -368,5 +378,66 @@ export type ProviderView = ProviderConfig & { has_key: boolean; models: number; 
 export type RecordStatus = { recording: boolean; elapsed_ms: number; frames: number; notes: { t_ms: number; text: string }[]; has_audio: boolean; error: string | null };
 export type SkillDraft = { name: string; description: string; body: string };
 export type ErrorGroup = { fingerprint: string; kind: string; message: string; count: number; first_at: number; last_at: number; detail: string };
+export type EvolutionSource = {
+  id: string;
+  status: string;
+  last_checked: string | null;
+  error: string | null;
+  items: number | null;
+};
+export type EvolutionFeature = {
+  id: string;
+  name: string;
+  product: string;
+  category: string;
+  status: string;
+  parity: string;
+  percent: number | null;
+  summary: string;
+  source_urls: string[];
+  blockers: string[];
+  investigation: string | null;
+  updated_at: string | null;
+};
+export type EvolutionTask = {
+  id: string;
+  feature_id: string;
+  title: string;
+  status: string;
+  branch: string | null;
+  worktree: string | null;
+  pr_draft: string | null;
+};
+export type EvolutionSummary = {
+  total: number;
+  signals: number;
+  untriaged: number;
+  equivalent: number;
+  partial: number;
+  missing: number;
+  unknown_count: number;
+  not_replicable: number;
+  blocked: number;
+  implemented: number;
+  coverage_percent: number | null;
+};
+export type EvolutionStatus = {
+  available: boolean;
+  reason: string | null;
+  engine_dir: string;
+  registry_path: string | null;
+  enabled: boolean;
+  interval_hours: number;
+  autonomy: string;
+  last_check: { at: string | null; status: string | null; added: number; changed: number; failed: number } | null;
+  summary: EvolutionSummary;
+  sources: EvolutionSource[];
+  features: EvolutionFeature[];
+  tasks: EvolutionTask[];
+  can_check: boolean;
+  check_reason: string | null;
+  node: string | null;
+  checkout: string | null;
+};
 export type PendingAction = { id: string; conversation_id: string; conversation_title: string; server: string; tool: string; arguments: unknown; model: string | null; status: string; result: string | null; created_at: number };
 export type Proactive = { enabled: boolean; brief_at: string; every_hours: number; model: string };

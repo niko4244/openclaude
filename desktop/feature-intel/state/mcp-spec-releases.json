@@ -1,15 +1,28 @@
 {
-  "checked": "2026-10-23T05:25:29.810Z",
-  "digest": "7de45e34d444abbc",
+  "checked": "2026-10-24T14:29:33.009Z",
+  "digest": "9b63b98bb5352471",
+  "etag": null,
+  "lastModified": null,
   "items": [
-    "2026-07-28 (2026-07-28): 2026-07-28 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2026-07-28",
-    "2026-07-28-RC (2026-05-29): 2026-07-28 RC — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2026-07-28-RC",
-    "2025-11-25 (2025-11-25): 2025-11-25 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2025-11-25",
-    "2025-11-25-RC (2025-11-15): 2025-11-25-RC — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2025-11-25-RC",
-    "2025-06-18 (2025-06-18): 2025-06-18 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2025-06-18",
-    "2025-03-26 (2025-03-26): 2025-03-26 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2025-03-26",
-    "2024-11-05-final (2025-03-26): 2024-11-05-final — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2024-11-05-final",
-    "2024-11-05 (2025-01-17): 2024-11-05 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2024-11-05",
-    "2024-10-07 (2024-11-06): 2024-10-07 — https://github.com/modelcontextprotocol/modelcontextprotocol/releases/tag/2024-10-07"
+    "2026-07-28: 2026-07-28",
+    "2026-07-28-RC: 2026-07-28 RC",
+    "2025-11-25: 2025-11-25",
+    "2025-11-25-RC: 2025-11-25-RC",
+    "2025-06-18: 2025-06-18",
+    "2025-03-26: 2025-03-26",
+    "2024-11-05-final: 2024-11-05-final",
+    "2024-11-05: 2024-11-05",
+    "2024-10-07: 2024-10-07"
+  ],
+  "keys": [
+    "2026-07-28",
+    "2026-07-28-RC",
+    "2025-11-25",
+    "2025-11-25-RC",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05-final",
+    "2024-11-05",
+    "2024-10-07"
   ]
 }

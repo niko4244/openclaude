@@ -46,6 +46,17 @@ Provider routing and agent orchestration live in Rust, outside the presentation 
 Each reply records `model_requested`, `model_served` (from the response body), `routed_host` (from `x-litellm-model-api-base`) and
 `fallbacks` (from `x-litellm-attempted-fallbacks`). The UI shows any difference, so a silent substitution is visible.
 
+## Evolution Engine (feature parity)
+
+`evolution.rs` reads the repository's feature registry (`desktop/feature-intel/registry.json`) and exposes
+`evolution_status`, `evolution_check` and `evolution_configure`. It is deliberately read-mostly: the sweep is the
+same Node engine the six-hour GitHub workflow runs, so the app cannot drift into a second implementation.
+Resolution order is `OPENCLAUDE_EVOLUTION_DIR`, a registry synced into `<data>/evolution`, then a checkout found by
+walking up from the working directory or the executable. Without a checkout the page says so and "Check now" stays
+disabled. The 15-minute ticker is inert unless `config.json` enables it, Node is present, and a sweep is due; the
+engine's own lock prevents a manual and a scheduled sweep from running together. Nothing in this path writes
+outside the registry/config/ledger or calls a model.
+
 ## Security model
 
 - IPC: one capability (`default`) for the `main` window; plugins limited to dialog, clipboard write, notification, open-url, and global shortcut.
