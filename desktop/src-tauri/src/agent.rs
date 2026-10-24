@@ -712,7 +712,7 @@ pub fn build_ssh_command(a: &RemoteArgs) -> anyhow::Result<Command> {
     script += &format!("command -v openclaude >/dev/null 2>&1 || {{ echo {CLI_MISSING} >&2; exit 127; }}; ");
     script += "IFS= read -r OPENAI_API_KEY; if [ -n \"$OPENAI_API_KEY\" ]; then export OPENAI_API_KEY; else unset OPENAI_API_KEY; fi; ";
     script += &format!(
-        "CLAUDE_CODE_USE_OPENAI=1 OPENAI_BASE_URL={} OPENAI_MODEL={m} exec openclaude --print --verbose --input-format stream-json --output-format stream-json --provider openai --model {m} --permission-mode {}",
+        "export CLAUDE_CODE_USE_OPENAI=1 OPENAI_BASE_URL={} OPENAI_MODEL={m}; exec openclaude --print --verbose --input-format stream-json --output-format stream-json --provider openai --model {m} --permission-mode {}",
         sh_quote(&base),
         sh_quote(a.permission_mode),
         m = sh_quote(a.model),

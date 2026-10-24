@@ -752,14 +752,97 @@ async fn preview_open(app: tauri::AppHandle, url: String) -> Res<()> {
     Ok(())
 }
 
+#[derive(Serialize, serde::Deserialize, Clone, PartialEq)]
+struct RemoteWorkspace {
+    host: String,
+    dir: String,
+}
+
+fn granted_remotes(state: &AppState) -> Vec<RemoteWorkspace> {
+    state.db.lock().unwrap().get_setting("remote_workspaces").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Remote folders are usable only after the user confirmed them in the native dialog of `remote_add`.
+fn check_remote(state: &AppState, host: &str, dir: &str) -> Res<()> {
+    if !granted_remotes(state).iter().any(|r| r.host == host && r.dir == dir) {
+        return Err("remote folder was not added through Remote (SSH)".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn ssh_hosts() -> Vec<String> {
+    agent::ssh_hosts()
+}
+
+#[tauri::command]
+fn remote_list(state: State<'_, Arc<AppState>>) -> Vec<RemoteWorkspace> {
+    granted_remotes(&state)
+}
+
+/// Grant a remote folder. Like the native folder picker for local folders, a native dialog
+/// (which page script cannot answer) asks first. Returns false when the user cancels.
+#[tauri::command]
+async fn remote_add(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, host: String, dir: String) -> Res<bool> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let (host, dir) = (host.trim().to_string(), dir.trim().to_string());
+    if !agent::valid_ssh_host(&host) {
+        return Err("Enter an alias from ~/.ssh/config, a hostname, or user@host.".into());
+    }
+    if !agent::valid_remote_dir(&dir) {
+        return Err("The remote folder must be absolute (/…) or start with ~/.".into());
+    }
+    let mut list = granted_remotes(&state);
+    if list.iter().any(|r| r.host == host && r.dir == dir) {
+        return Ok(true);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "Run the OpenClaude coding agent on {host} in {dir}?\n\nOpenClaude connects with your own SSH keys (like `ssh {host}`) and reaches your model gateway through an encrypted SSH tunnel. The agent can read and change files in that folder; the permission mode decides what it asks first."
+        ))
+        .title("Remote coding over SSH")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Allow".into(), "Cancel".into()))
+        .show(move |ok| {
+            let _ = tx.send(ok);
+        });
+    if !rx.await.unwrap_or(false) {
+        return Ok(false);
+    }
+    list.push(RemoteWorkspace { host, dir });
+    state.db.lock().unwrap().set_setting("remote_workspaces", &serde_json::to_string(&list).map_err(e)?).map_err(e)?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn remote_check(state: State<'_, Arc<AppState>>, host: String, dir: String) -> Res<agent::RemoteCheck> {
+    check_remote(&state, &host, &dir)?;
+    Ok(agent::remote_check(&host, &dir).await)
+}
+
+/// `host` set: the agent runs on that SSH host in the remote folder `cwd`.
 #[tauri::command]
 async fn code_start(
     state: State<'_, Arc<AppState>>,
     cwd: String,
+    host: Option<String>,
     model: String,
     permission_mode: String,
     on_event: Channel<agent::CodeEvent>,
 ) -> Res<String> {
+    if let Some(host) = host {
+        check_remote(&state, &host, &cwd)?;
+        let gw = state.gateway.read().await.clone();
+        let (gw, model) = providers::route(&state.db.lock().unwrap(), &gw, &model);
+        let remote_port = 20000 + (rand::random::<u16>() % 40000);
+        let cmd = agent::build_ssh_command(&agent::RemoteArgs { host: &host, dir: &cwd, model: &model, permission_mode: &permission_mode, openai_base: &gw.openai_base(), remote_port }).map_err(e)?;
+        // The key is the first stdin line, read on the remote by a shell builtin (never on a command line).
+        let key_line = format!("{}\n", gw.api_key.as_deref().unwrap_or("").trim());
+        let id = db::new_id();
+        state.code.start_with(id.clone(), cmd, Some(key_line), Some(host), on_event).await.map_err(e)?;
+        return Ok(id);
+    }
     let dir = check_workspace(&state, &cwd)?;
     let setting = state.db.lock().unwrap().get_setting("openclaude_cli_path");
     let cli = agent::locate_cli(setting).ok_or("OpenClaude CLI not found. Set OPENCLAUDE_BIN or install @gitlawb/openclaude.")?;
@@ -797,13 +880,21 @@ async fn code_stop(state: State<'_, Arc<AppState>>, session_id: String) -> Res<(
 }
 
 #[tauri::command]
-async fn git_status(state: State<'_, Arc<AppState>>, cwd: String) -> Res<agent::GitStatus> {
+async fn git_status(state: State<'_, Arc<AppState>>, cwd: String, host: Option<String>) -> Res<agent::GitStatus> {
+    if let Some(host) = host {
+        check_remote(&state, &host, &cwd)?;
+        return Ok(agent::remote_git_status(&host, &cwd).await);
+    }
     let dir = check_workspace(&state, &cwd)?;
     Ok(agent::git_status(&dir).await)
 }
 
 #[tauri::command]
-async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<String>) -> Res<String> {
+async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, host: Option<String>, path: Option<String>) -> Res<String> {
+    if let Some(host) = host {
+        check_remote(&state, &host, &cwd)?;
+        return agent::remote_git_diff(&host, &cwd, path.as_deref()).await.map_err(e);
+    }
     let dir = check_workspace(&state, &cwd)?;
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
@@ -1606,6 +1697,10 @@ pub fn run() {
             code_stop,
             git_status,
             git_diff,
+            ssh_hosts,
+            remote_list,
+            remote_add,
+            remote_check,
             app_info,
             probe_model,
             get_probes,
