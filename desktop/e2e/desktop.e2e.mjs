@@ -346,7 +346,9 @@ try {
 
   // 13. code tab: recent folder + terminal
   await p2.click('.nav-item:has-text("Code")');
-  await p2.locator(".nav-item.mono").first().click();
+  const recent = p2.locator(".nav-item.mono").first();
+  if (!(await recent.waitFor({ timeout: 60000 }).then(() => true, () => false))) await p2.screenshot({ path: join(out, "13-code-no-recents.png") });
+  await recent.click();
   await p2.click('button:has-text("Terminal")');
   await p2.fill(".term-in input", "git status --short; echo done-marker");
   await p2.keyboard.press("Enter");

@@ -5,7 +5,7 @@
 
 use crate::db::{Db, new_id, now_ms};
 use crate::tasks::Task;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

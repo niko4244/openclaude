@@ -5,6 +5,7 @@ mod chrome_bridge;
 mod computer;
 mod mcp_oauth;
 mod pdf;
+mod sysprompt;
 mod providers;
 mod recorder;
 mod plugins;

@@ -123,19 +123,10 @@ pub fn to_wire(system: &str, history: &[Message]) -> Vec<Value> {
     fixed
 }
 
-fn system_prompt(state: &AppState, conversation_id: &str, query: &str) -> String {
+fn system_prompt(state: &AppState, conversation_id: &str, query: &str, model: &str, modules: &str) -> String {
     let db = state.db.lock().unwrap();
-    let mut parts = vec![format!(
-        "You are a helpful assistant running inside OpenClaude Desktop. Current date: {}.\n\n\
-         When you produce substantial standalone content the user will likely reuse or iterate on (a complete \
-         web page, an SVG image, a document, or a program longer than about 20 lines), put it in one fenced code \
-         block whose info string is the language followed by a short title, for example ```html title=\"Pricing page\". \
-         Use language `markdown` for documents. When revising such content, reuse the same title. \
-         Do not add a title to short snippets. For an interactive app or widget, write one React component with a default \
-         export in a ```jsx block (Tailwind classes work; you may import react, lucide-react, recharts, d3, lodash, papaparse \
-         and three). For a diagram, use a ```mermaid block.",
-        chrono_date()
-    )];
+    // Our own prompt (src/sysprompt.rs) first; the user's and the project's instructions after it, so they win.
+    let mut parts = vec![crate::sysprompt::core(model, &chrono_date()), modules.to_string()];
     if let Some(g) = db.get_setting("system_prompt").filter(|s| !s.trim().is_empty()) {
         parts.push(g);
     }
@@ -279,13 +270,8 @@ async fn run_inner(state: &Arc<AppState>, run: &Run, args: &SendArgs, ch: &Sink)
         let hist = state.db.lock().unwrap().messages(cid)?;
         hist.iter().rev().find(|m| m.role == "user").map(|m| text_of(&m.content)).unwrap_or_default()
     };
-    let mut system = system_prompt(state, cid, &query);
-    if tools.iter().any(|t| t["function"]["name"] == "skills__search") {
-        system.push_str(&format!(
-            "\n\nThe user has {} skills, commands and agents installed (Claude plugins). When a task might match one, call skills__search, then skills__load, and follow its instructions.",
-            state.plugins.index().len()
-        ));
-    }
+    let modules = crate::sysprompt::modules(crate::sysprompt::Caps::from_tools(&tools, !ch.interactive));
+    let mut system = system_prompt(state, cid, &query, &args.model, &modules);
     if !plugin_ctx.trim().is_empty() {
         system.push_str("\n\n");
         system.push_str(plugin_ctx.trim());
