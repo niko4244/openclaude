@@ -46,11 +46,18 @@ test("research-only autonomy refuses to plan native work", () => {
 });
 
 test("the production checkout is never a worktree", () => {
-  const repo = "C:/work/openclaude";
+  // resolveWorktree uses the host platform's path rules, so the fixture root must be
+  // absolute there: "C:/work/openclaude" is absolute on Windows but relative on the
+  // Linux CI runner, where it resolved underneath the checkout. The semantics under
+  // test are the same on both: the repo and its descendants are refused, and the
+  // worktree lands outside the repo under ../oc-evolution.
+  const windows = process.platform === "win32";
+  const repo = windows ? "C:/work/openclaude" : "/work/openclaude";
+  const expected = windows ? "C:/work/oc-evolution/feat_x" : "/work/oc-evolution/feat_x";
   assert.throws(() => assertIsolatedWorktree(repo, repo), PipelineRefusal);
   assert.throws(() => assertIsolatedWorktree(`${repo}/desktop/x`, repo), PipelineRefusal);
-  const wt = resolveWorktree(config(), "feat_x", "C:/work/openclaude").replace(/\\/g, "/");
-  assert.equal(wt, "C:/work/oc-evolution/feat_x");
+  const wt = resolveWorktree(config(), "feat_x", repo).replace(/\\/g, "/");
+  assert.equal(wt, expected);
 });
 
 test("planning creates one ledger task, a spec and an isolated branch", () => {
