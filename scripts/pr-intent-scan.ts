@@ -85,6 +85,18 @@ const EXECUTABLE_PATH_REGEX =
 const SENSITIVE_PATH_REGEX =
   /^(?:\.github\/workflows\/|scripts\/|bin\/|install(?:\/|\.|$)|.*(?:Dockerfile|docker-compose|compose\.ya?ml)$)/i
 
+// A payload counts as inline only when the encoded argument is written out on the
+// same line; a bare flag is how a wrapper passes a benign script.
+const INLINE_ENCODED_POWERSHELL_REGEX =
+  /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b(?:\s*["'])?\s*[A-Za-z0-9+/]{16,}={0,2}/i
+const ENCODED_POWERSHELL_REGEX =
+  /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b/i
+const ENCODED_COMMAND_FLAG_REGEX = /(?:-enc|-encodedcommand)\b/i
+const BASE64_LITERAL_PATTERN = '[A-Za-z0-9+/]{16,}={0,2}'
+const BASE64_ASSIGNMENT_REGEX = new RegExp(
+  `(?:^|[\\s;({,])(?:(?:const|let|var)\\s+)?\\$?([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*[\\w<>[\\]|.]+\\s*)?=\\s*["'](${BASE64_LITERAL_PATTERN})["']`,
+)
+
 function parseOptions(argv: string[]): CliOptions {
   const options: CliOptions = {
     baseRef: 'origin/main',
@@ -309,6 +321,100 @@ function findSensitivePathFindings(line: DiffLine): Finding[] {
   return []
 }
 
+type PayloadAssignment = {
+  file: string
+  line: number
+}
+
+// A base64 literal assigned to a name anywhere in the diff: `const enc = "..."`,
+// `$enc = "..."`, `ENC="..."`.
+function collectPayloadAssignments(
+  lines: DiffLine[],
+): Map<string, PayloadAssignment[]> {
+  const assignments = new Map<string, PayloadAssignment[]>()
+
+  for (const line of lines) {
+    const match = BASE64_ASSIGNMENT_REGEX.exec(line.content)
+    if (!match) continue
+
+    const name = match[1]
+    const entries = assignments.get(name) ?? []
+    const duplicate = entries.some(
+      entry => entry.file === line.file && entry.line === line.line,
+    )
+    if (!duplicate) {
+      entries.push({ file: line.file, line: line.line })
+      assignments.set(name, entries)
+    }
+  }
+
+  return assignments
+}
+
+function resolvePayloadAssignment(
+  assignments: Map<string, PayloadAssignment[]>,
+  file: string,
+  name: string,
+): PayloadAssignment | null {
+  const entries = assignments.get(name)
+  if (!entries || entries.length === 0) return null
+
+  const inFile = entries.filter(entry => entry.file === file)
+  if (inFile.length === 1) return inFile[0]
+  if (inFile.length > 1) return null
+
+  // The payload may be built in one file and used in another; resolve that only
+  // when a single file defines the name, so unrelated constants never pair up.
+  return entries.length === 1 ? entries[0] : null
+}
+
+function encodedPayloadVariable(content: string): string | null {
+  const flag = ENCODED_COMMAND_FLAG_REGEX.exec(content)
+  if (!flag) return null
+
+  const rest = content.slice(flag.index + flag[0].length)
+  const braced = /^\s*["'`]?\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(rest)
+  if (braced) return braced[1]
+
+  const variable = /^\s*["'`]?\s*\$([A-Za-z_][A-Za-z0-9_]*)/.exec(rest)
+  if (variable) return variable[1]
+
+  const identifier = /^\s*["'`]?\s*([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_$+/=-])/.exec(
+    rest,
+  )
+  return identifier ? identifier[1] : null
+}
+
+function findEncodedVariableFindings(
+  line: DiffLine,
+  assignments: Map<string, PayloadAssignment[]>,
+): Finding[] {
+  if (!ENCODED_POWERSHELL_REGEX.test(line.content)) return []
+  if (INLINE_ENCODED_POWERSHELL_REGEX.test(line.content)) return []
+
+  const name = encodedPayloadVariable(line.content)
+  if (!name) return []
+
+  const assignment = resolvePayloadAssignment(assignments, line.file, name)
+  if (!assignment) return []
+
+  const origin =
+    assignment.file === line.file
+      ? `line ${assignment.line}`
+      : `${assignment.file}:${assignment.line}`
+
+  return [
+    {
+      severity: 'high',
+      code: 'powershell-encoded-variable',
+      file: line.file,
+      line: line.line,
+      detail: `Added encoded PowerShell invocation with a base64 payload assigned to ${name} at ${origin}`,
+      excerpt: trimExcerpt(line.content),
+    },
+  ]
+}
+
 function findCommandFindings(line: DiffLine): Finding[] {
   const findings: Finding[] = []
   const lower = line.content.toLowerCase()
@@ -320,10 +426,8 @@ function findCommandFindings(line: DiffLine): Finding[] {
       'Added remote download followed by execution or staging',
     ],
     [
-      // The payload has to be inline. A variable (${enc}) is how a benchmark or a
-      // wrapper passes a benign script; flagging the flag alone buried real payloads.
       'powershell-encoded',
-      /\bpowershell(?:\.exe)?\b[^\n]*(?:-enc|-encodedcommand)\b(?:\s*["'])?\s*[A-Za-z0-9+/]{16,}={0,2}/i,
+      INLINE_ENCODED_POWERSHELL_REGEX,
       'Added encoded PowerShell invocation',
     ],
     [
@@ -405,12 +509,14 @@ function findCommandFindings(line: DiffLine): Finding[] {
 }
 
 export function scanAddedLines(lines: DiffLine[]): Finding[] {
-  const findings = lines
-    .filter(line => !SELF_EXCLUDED_FILES.has(line.file))
-    .flatMap(line => [
+  const scanned = lines.filter(line => !SELF_EXCLUDED_FILES.has(line.file))
+  const assignments = collectPayloadAssignments(scanned)
+
+  const findings = scanned.flatMap(line => [
     ...findUrlFindings(line),
     ...findCommandFindings(line),
     ...findSensitivePathFindings(line),
+    ...findEncodedVariableFindings(line, assignments),
   ])
   return uniqueFindings(findings)
 }

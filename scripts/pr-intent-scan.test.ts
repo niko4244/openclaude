@@ -84,6 +84,60 @@ describe('scanAddedLines', () => {
     expect(findings.some(finding => finding.code === 'powershell-encoded')).toBe(false)
   })
 
+  test('flags a payload literal assigned earlier in the same diff', () => {
+    const findings = scanAddedLines([
+      line('  const enc = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/e2e/perf.e2e.mjs',
+        line: 80,
+      }),
+      line(
+        '  execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${enc}`)',
+        { file: 'desktop/e2e/perf.e2e.mjs', line: 85 },
+      ),
+    ])
+
+    const finding = findings.find(
+      item => item.code === 'powershell-encoded-variable',
+    )
+    expect(finding?.severity).toBe('high')
+    expect(finding?.line).toBe(85)
+    expect(finding?.detail).toContain('line 80')
+  })
+
+  test('flags a payload literal assigned in another file of the same diff', () => {
+    const findings = scanAddedLines([
+      line('const encoded = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/scripts/payload.mjs',
+        line: 4,
+      }),
+      line('powershell.exe -enc $encoded', {
+        file: 'desktop/e2e/runner.mjs',
+        line: 12,
+      }),
+    ])
+
+    const finding = findings.find(
+      item => item.code === 'powershell-encoded-variable',
+    )
+    expect(finding?.detail).toContain('desktop/scripts/payload.mjs:4')
+  })
+
+  test('does not pair a name defined in two different files', () => {
+    const findings = scanAddedLines([
+      line('const enc = "SQBtAHAAcgBvAHYAZQBkAA=="', {
+        file: 'desktop/scripts/one.mjs',
+      }),
+      line('const enc = "SQBFAFgAIABIAGkA"', { file: 'desktop/scripts/two.mjs' }),
+      line('execSync(`powershell -enc ${enc}`)', {
+        file: 'desktop/e2e/runner.mjs',
+      }),
+    ])
+
+    expect(
+      findings.some(item => item.code === 'powershell-encoded-variable'),
+    ).toBe(false)
+  })
+
   test('flags long encoded blobs', () => {
     const findings = scanAddedLines([
       line(`const payload = "${'A'.repeat(96)}"`),
