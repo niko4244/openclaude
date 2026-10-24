@@ -25,6 +25,13 @@ type CliOptions = {
 
 const MARKER = '<!-- pr-intent-scan -->'
 const MAX_ROWS = 25
+// The report is written by a run of the pull request's own code, so it is data:
+// every field is bounded before it reaches the comment body.
+const MAX_FINDINGS = 200
+const MAX_FILE_CHARS = 300
+const MAX_DETAIL_CHARS = 300
+const MAX_EXCERPT_CHARS = 500
+const MAX_REF_CHARS = 100
 
 function escapeHtml(value: string): string {
   return value
@@ -38,7 +45,67 @@ function cell(value: string): string {
 }
 
 function shortRef(ref: string): string {
+  if (!ref) return 'unknown'
   return ref.length > 8 ? ref.slice(0, 8) : ref
+}
+
+function clampText(value: unknown, limit: number): string | null {
+  return typeof value === 'string' ? value.slice(0, limit) : null
+}
+
+export function parseReport(text: string): ScanReport | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+
+  if (!parsed || typeof parsed !== 'object') return null
+  const candidate = parsed as Record<string, unknown>
+  if (!Array.isArray(candidate.findings)) return null
+
+  const findings: ScanFinding[] = []
+  for (const raw of candidate.findings) {
+    if (findings.length >= MAX_FINDINGS) break
+    if (!raw || typeof raw !== 'object') continue
+
+    const item = raw as Record<string, unknown>
+    if (item.severity !== 'high' && item.severity !== 'medium') continue
+
+    const file = clampText(item.file, MAX_FILE_CHARS)
+    const detail = clampText(item.detail, MAX_DETAIL_CHARS)
+    const excerpt = clampText(item.excerpt, MAX_EXCERPT_CHARS)
+    if (!file || !detail || excerpt === null) continue
+
+    const line =
+      typeof item.line === 'number' && Number.isFinite(item.line) && item.line >= 0
+        ? Math.trunc(item.line)
+        : 0
+
+    findings.push({
+      severity: item.severity,
+      code: clampText(item.code, MAX_REF_CHARS) ?? '',
+      file,
+      line,
+      detail,
+      excerpt,
+    })
+  }
+
+  const addedLines =
+    typeof candidate.addedLines === 'number' &&
+    Number.isFinite(candidate.addedLines) &&
+    candidate.addedLines >= 0
+      ? Math.trunc(candidate.addedLines)
+      : 0
+
+  return {
+    baseRef: clampText(candidate.baseRef, MAX_REF_CHARS) ?? '',
+    headRef: clampText(candidate.headRef, MAX_REF_CHARS) ?? '',
+    addedLines,
+    findings,
+  }
 }
 
 export function renderComment(report: ScanReport): string {
@@ -108,16 +175,11 @@ function readReport(path: string): { report: ScanReport | null; reason: string }
     return { report: null, reason: `${path} is empty` }
   }
 
-  try {
-    const parsed = JSON.parse(text) as ScanReport
-    if (!Array.isArray(parsed.findings)) {
-      return { report: null, reason: `${path} has no findings array` }
-    }
-    return { report: parsed, reason: '' }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return { report: null, reason: `Could not parse ${path}: ${message}` }
+  const report = parseReport(text)
+  if (!report) {
+    return { report: null, reason: `${path} is not a scan report` }
   }
+  return { report, reason: '' }
 }
 
 function gh(args: string[], input?: string): string {

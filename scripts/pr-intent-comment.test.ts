@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
-import { renderComment, renderFailure, type ScanFinding } from './pr-intent-comment.ts'
+import {
+  parseReport,
+  renderComment,
+  renderFailure,
+  type ScanFinding,
+} from './pr-intent-comment.ts'
 
 const MARKER = '<!-- pr-intent-scan -->'
 
@@ -85,6 +90,46 @@ describe('renderComment', () => {
 
     expect(body).toContain('_5 more finding(s) in the job log._')
     expect(body.match(/^\| high \|/gm)).toHaveLength(25)
+  })
+})
+
+describe('parseReport', () => {
+  test('treats a report from the pull request run as bounded data', () => {
+    const report = parseReport(
+      JSON.stringify({
+        baseRef: 'a'.repeat(500),
+        headRef: 'bbbbbbbb',
+        addedLines: 12.9,
+        findings: [
+          { severity: 'high', file: 'f.mjs', line: 4, detail: 'd', excerpt: 'e'.repeat(4000) },
+          { severity: 'critical', file: 'g.mjs', line: 5, detail: 'd', excerpt: 'e' },
+          { severity: 'medium', file: 42, line: 6, detail: 'd', excerpt: 'e' },
+        ],
+      }),
+    )
+
+    expect(report?.baseRef).toHaveLength(100)
+    expect(report?.addedLines).toBe(12)
+    expect(report?.findings).toHaveLength(1)
+    expect(report?.findings[0].excerpt).toHaveLength(500)
+  })
+
+  test('caps the number of findings it accepts', () => {
+    const findings = Array.from({ length: 500 }, (_, index) => ({
+      severity: 'medium',
+      file: 'f.mjs',
+      line: index,
+      detail: 'd',
+      excerpt: 'e',
+    }))
+
+    expect(parseReport(JSON.stringify({ findings }))?.findings).toHaveLength(200)
+  })
+
+  test('rejects content that is not a scan report', () => {
+    expect(parseReport('not json')).toBeNull()
+    expect(parseReport('null')).toBeNull()
+    expect(parseReport('{"findings":"nope"}')).toBeNull()
   })
 })
 

@@ -74,7 +74,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -111,17 +110,16 @@ jobs:
           PR_SCAN_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
         run: bun run security:pr-scan -- --base "$PR_SCAN_BASE" --head "$PR_SCAN_HEAD" --json > "$RUNNER_TEMP/pr-intent-scan.json"
 
-      # Forks get a read-only token, so only same-repository PRs get a comment.
-      - name: Comment findings on the pull request
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          bun scripts/pr-intent-comment.ts
-          --report "$RUNNER_TEMP/pr-intent-scan.json"
-          --pr "${{ github.event.pull_request.number }}"
-          --repo "${{ github.repository }}"
+      # This job runs the pull request's own code with a read-only token. The
+      # report is published by pr-intent-comment.yml, which never runs it.
+      - name: Upload the scan report
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-intent-scan
+          path: ${{ runner.temp }}/pr-intent-scan.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Fail when the scan does not pass
         if: ${{ steps.scan.outcome == 'failure' }}
