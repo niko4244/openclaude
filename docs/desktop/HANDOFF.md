@@ -85,6 +85,30 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
+## Prompt library (matrix row 27, branch `feat/desktop-prompt-library`)
+- **Worktree:** `C:\Users\nikma\Desktop\oc-prompt-library`, branched from `feat/desktop-2.0` at `a03782ad`. Not merged.
+- **Code:**
+  - Backend: `src-tauri/src/prompts.rs`. It reuses `plugins.rs` (install, update, rollback, remove, `md_files`, `frontmatter`) through a second `Plugins` instance, `AppState.prompts`, rooted at `<data>/prompts`. So prompt collections never run hooks, add MCP connectors or reach the CLI's `--plugin-dir`.
+  - UI: `src/components/PromptLibrary.tsx`, with the library dialog, the fill-in dialog and the Settings tab.
+  - Hooks in other files: `Composer.tsx` (book button, `insert` prop, a "/" pick of a prompt) and `App.tsx` (dialogs; `.app` goes inert while one is open).
+- **Collection layouts:**
+  - (a) A Claude plugin's `commands/**/*.md`: when a `commands/` folder exists, only it is read.
+  - (b) A plain folder of `*.md`: hidden folders and README / LICENSE / CONTRIBUTING / CHANGELOG / CODE_OF_CONDUCT / SECURITY / CLAUDE / AGENTS are skipped. The front matter `title`, `description`, `tags` (list or `[a, b]`) and `category` are read. A leading `# Heading` becomes the title and is not inserted.
+  - (c) "My prompts": registry id `mine`, files in `<data>/prompts/mine/<kebab-title>.md`, created on first use. It can't be removed or switched off.
+- **Install specs:** `owner/repo`, a GitHub folder URL `https://github.com/o/r/tree/<ref>/<path>` (installed as `<repo>-<folder>`), a marketplace repo (pick entries), or any git URL. `file://` git URLs are now accepted, for plugins too.
+- **Updates:** the 15-minute plugin loop also runs `state.prompts.update_all()` and emits `prompts-changed`. The Composer's "/" cache and the open dialogs listen for that event.
+- **Favorites:** `<data>/prompts/favorites.json`, keyed by prompt id `<collection id>/<name>`.
+- **Placeholders:** `$ARGUMENTS`, `$1`-`$9` and `{{name}}` are filled in one pass. An empty value keeps its placeholder.
+  - A prompt picked in the "/" menu opens the same fill-in dialog and inserts its text.
+  - A fully typed `/collection:prompt args` that is sent still expands like a command (`slash_expand` falls back to prompts).
+- **Anthropic's library:** https://code.claude.com/docs/en/prompt-library is linked from the library footer and from Settings. Its text is never bundled or copied, and no collection is preinstalled.
+- **Verify:**
+  - `cargo test --lib` (`prompts::tests`, 6 tests).
+  - `node e2e/prompt-library.e2e.mjs`: no model or gateway needed. It builds a `file://` git fixture and restores the clipboard text after the Copy check.
+  - `node e2e/a11y.e2e.mjs`: now also scans the library (light and dark), the new-prompt form, the fill-in dialog and Settings → Prompt library.
+- **Last run:** prompt-library E2E 20/20; a11y 0 across 28 states; Rust 96 passed, 9 ignored. The a11y dark scan surfaced a gap that predates this work: dark theme never redefined `--err`, so `.btn.danger` was 3.2:1. Dark now uses `--err: #f07a73` (about 6:1).
+- **Disk:** C: had under 2 GB free, so this worktree builds with `CARGO_BUILD_BUILD_DIR` pointing at the main checkout's `src-tauri/target`, `node_modules` as a junction to the main checkout's, and `npx tauri build --no-bundle`.
+
 ## Next steps (in order)
 1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.
 2. Visual: compare against reference screenshots once Nik drops them into `docs/parity/reference/`.

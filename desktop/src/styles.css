@@ -35,7 +35,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #151515; --bg-elev: #1f1f1d; --bg-sidebar: #111111; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
-    --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
+    --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795; --err: #f07a73;
     --accent: #4db39c; --accent-hover: #5fc4ad; --accent-ink: #0d1f1b; --accent-soft: rgba(77, 179, 156, 0.15); --code-bg: #0e0e0f;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.3);
     color-scheme: dark;
@@ -43,7 +43,7 @@
 }
 :root[data-theme="dark"] {
   --bg: #151515; --bg-elev: #1f1f1d; --bg-sidebar: #111111; --bg-hover: rgba(255, 255, 255, 0.055); --bg-active: rgba(255, 255, 255, 0.095);
-  --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795;
+  --bubble: #2a2a27; --border: #292929; --border-strong: #3e3d3a; --text: #ecebe6; --text-dim: #aaa79f; --text-faint: #9d9a92; --ok: #6cc795; --err: #f07a73;
   --accent: #4db39c; --accent-hover: #5fc4ad; --accent-ink: #0d1f1b; --accent-soft: rgba(77, 179, 156, 0.15); --code-bg: #0e0e0f;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.3);
   color-scheme: dark;

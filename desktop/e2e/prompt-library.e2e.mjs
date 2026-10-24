@@ -44,7 +44,8 @@ for (let i = 0; i < 100 && !ui; i++) {
 }
 const invoke = (cmd, args = {}) => ui.evaluate(([c, a]) => window.__TAURI_INTERNALS__.invoke(c, a), [cmd, args]);
 const dialog = '[role="dialog"][aria-labelledby="library-title"]';
-const titles = () => ui.locator(`${dialog} .library-row .title`).allInnerTexts();
+// Rows of favorites start with a screen-reader-only "Favorite:" marker.
+const titles = async () => (await ui.locator(`${dialog} .library-row .title`).allInnerTexts()).map((t) => t.replace(/^Favorite:\s*/, ""));
 const search = async (q) => { await ui.fill('input[aria-label="Search prompts"]', q); await sleep(150); return titles(); };
 const openLibrary = async () => { await ui.click('.composer button[aria-label="Prompt library"]'); await ui.waitForSelector(dialog); await sleep(300); };
 const cardText = (id) => ui.locator(`[data-collection="${id}"]`).innerText();
