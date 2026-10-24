@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Clock, Loader2, Play, Plus, Trash2 } from "lucide-react";
-import { api, type ModelEntry, type Task } from "../api";
+import { api, type ModelEntry, type Task, type PendingAction, type Proactive } from "../api";
 import { ago } from "./Pages";
 
 function describe(schedule: string) {
@@ -52,7 +52,9 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
     <div className="page">
       <div className="page-inner">
         <div className="page-head"><h1>Tasks</h1><span className="spacer" /><button className="btn primary" onClick={() => open(blank(defaultModel))}><Plus size={15} /> New task</button></div>
-        <p className="muted">Saved prompts that run on demand or on a schedule. Each run becomes a chat you can open and continue. Tasks run while OpenClaude is running (it stays in the tray when closed). Background runs can only use tools set to “Always allow”.</p>
+        <p className="muted">Saved prompts that run on demand or on a schedule. Each run becomes a chat you can open and continue. Tasks run while OpenClaude is running (it stays in the tray when closed). Tools set to “Always allow” run directly; anything else waits for you in the inbox below.</p>
+        <Inbox onOpenChat={onOpenChat} toast={toast} />
+        <ProactiveCard models={models} defaultModel={defaultModel} toast={toast} />
         {edit && (
           <div className="card">
             <div className="field"><label>Title</label><input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Morning briefing" /></div>
@@ -107,6 +109,72 @@ export function TasksPage({ models, defaultModel, onOpenChat, toast }: { models:
           ))}
           {!tasks.length && !edit && <div className="muted" style={{ padding: 14 }}>No tasks yet.</div>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function Inbox({ onOpenChat, toast }: { onOpenChat: (id: string) => void; toast: (m: string) => void }) {
+  const [items, setItems] = useState<PendingAction[]>([]);
+  const load = async () => setItems(await api.pendingList());
+  useEffect(() => {
+    void load();
+    const un = listen("inbox-changed", () => void load());
+    const un2 = listen("tasks-changed", () => void load());
+    const t = setInterval(load, 15000);
+    return () => { void un.then((f) => f()); void un2.then((f) => f()); clearInterval(t); };
+  }, []);
+  const waiting = items.filter((i) => i.status === "pending");
+  const decide = async (i: PendingAction, approve: boolean) => {
+    try { await api.pendingDecide(i.id, approve); toast(approve ? `Approved ${i.tool}` : `Declined ${i.tool}`); await load(); }
+    catch (e) { toast(String(e)); }
+  };
+  if (!items.length) return null;
+  return (
+    <div className="card inbox" aria-label="Approvals inbox">
+      <div className="card-head"><span className="name">Waiting for your approval</span><span className="badge">{waiting.length}</span></div>
+      {waiting.length === 0 && <div className="muted">Nothing is waiting.</div>}
+      {waiting.map((i) => (
+        <div key={i.id} className="offer-row" data-pending={i.tool}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <strong>{i.server} › {i.tool}</strong> <span className="muted">· from “{i.conversation_title}”</span>
+            <pre className="mono context-preview" style={{ margin: "4px 0 0", maxHeight: 120 }}>{JSON.stringify(i.arguments, null, 2)}</pre>
+          </span>
+          <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <button className="btn primary" onClick={() => void decide(i, true)}>Approve</button>
+            <button className="btn" onClick={() => void decide(i, false)}>Decline</button>
+            <button className="btn" onClick={() => onOpenChat(i.conversation_id)}>Open chat</button>
+          </span>
+        </div>
+      ))}
+      {items.some((i) => i.status !== "pending") && (
+        <details style={{ marginTop: 6 }}>
+          <summary className="muted">Recent decisions</summary>
+          {items.filter((i) => i.status !== "pending").map((i) => <div key={i.id} className="muted" style={{ fontSize: 12.5 }}>{i.status} · {i.server} › {i.tool} · {new Date(i.created_at).toLocaleString()}</div>)}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ProactiveCard({ models, defaultModel, toast }: { models: ModelEntry[]; defaultModel: string | null; toast: (m: string) => void }) {
+  const [p, setP] = useState<Proactive | null>(null);
+  useEffect(() => { void api.proactiveGet().then((x) => setP({ ...x, model: x.model || defaultModel || "" })); }, [defaultModel]);
+  if (!p) return null;
+  const save = async (next: Proactive) => {
+    try { await api.proactiveSet(next); setP(next); toast(next.enabled ? "Proactive assistant on" : "Proactive assistant off"); }
+    catch (e) { toast(String(e)); }
+  };
+  return (
+    <div className="card" aria-label="Proactive assistant">
+      <div className="card-head"><span className="name">Proactive assistant</span>{p.enabled && <span className="badge local">on</span>}</div>
+      <div className="muted" style={{ margin: "4px 0 8px" }}>A morning brief and regular check-ins across your connectors (mail, calendar, tasks…). It reads freely; anything that would change something waits for your approval above.</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <label className="muted">Brief at <input type="time" value={p.brief_at} onChange={(e) => setP({ ...p, brief_at: e.target.value })} aria-label="Brief time" /></label>
+        <label className="muted">Check in every <select value={p.every_hours} onChange={(e) => setP({ ...p, every_hours: Number(e.target.value) })} aria-label="Check-in interval">{[0, 1, 2, 3, 4, 6, 8, 12].map((h) => <option key={h} value={h}>{h === 0 ? "never" : `${h} h`}</option>)}</select></label>
+        <select value={p.model} onChange={(e) => setP({ ...p, model: e.target.value })} aria-label="Model">{models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}</select>
+        <button className="btn primary" onClick={() => void save({ ...p, enabled: true })}>{p.enabled ? "Save" : "Turn on"}</button>
+        {p.enabled && <button className="btn" onClick={() => void save({ ...p, enabled: false })}>Turn off</button>}
       </div>
     </div>
   );

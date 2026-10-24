@@ -43,6 +43,12 @@ const MIGRATIONS: &[&str] = &[
         created_at INTEGER NOT NULL);",
     // v5: folder tasks (Cowork-style): run the coding agent in a granted folder
     "ALTER TABLE tasks ADD COLUMN workspace TEXT;",
+    // v6: approvals inbox: tool calls from background runs wait here for the user
+    "CREATE TABLE pending_actions(
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        server TEXT NOT NULL, tool TEXT NOT NULL, arguments TEXT NOT NULL, model TEXT,
+        status TEXT NOT NULL DEFAULT 'pending', result TEXT, created_at INTEGER NOT NULL, decided_at INTEGER);
+     CREATE INDEX pending_status ON pending_actions(status, created_at);",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

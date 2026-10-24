@@ -13,6 +13,7 @@ mod diag;
 mod devices;
 mod extensions;
 mod gateway;
+mod inbox;
 mod knowledge;
 mod mcp;
 mod probe;
@@ -808,6 +809,60 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- approvals inbox and the proactive assistant
+
+#[tauri::command]
+fn pending_list(state: State<'_, Arc<AppState>>) -> Res<Vec<inbox::Pending>> {
+    state.db.lock().unwrap().pending_actions().map_err(e)
+}
+
+/// Approve: run the queued tool, record the result, and let the assistant continue in that chat.
+#[tauri::command]
+async fn pending_decide(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, id: String, approve: bool) -> Res<()> {
+    let p = state.db.lock().unwrap().get_pending(&id).map_err(e)?.ok_or("That request is gone")?;
+    if p.status != "pending" {
+        return Err("Already decided".into());
+    }
+    if !approve {
+        state.db.lock().unwrap().decide_pending(&id, "denied", None).map_err(e)?;
+        let _ = app.emit("inbox-changed", ());
+        return Ok(());
+    }
+    let (ran, text) = match state.mcp.call(&p.server, &p.tool, p.arguments.clone()).await {
+        Ok((t, _, false)) => (true, t),
+        Ok((t, _, true)) => (false, t),
+        Err(err) => (false, err.to_string()),
+    };
+    if !state.db.lock().unwrap().decide_pending(&id, if ran { "done" } else { "failed" }, Some(&text.chars().take(4000).collect::<String>())).map_err(e)? {
+        return Err("Already decided".into());
+    }
+    let _ = app.emit("inbox-changed", ());
+    let model = p.model.clone().filter(|m| !m.is_empty()).or_else(|| state.db.lock().unwrap().get_setting("default_model"));
+    if let Some(model) = model {
+        let st = state.inner().clone();
+        let prompt = inbox::decision_prompt(&p, ran, &text);
+        tauri::async_runtime::spawn(async move {
+            let run = Arc::new(chat::Run { cancel: tokio::sync::Notify::new() });
+            let args = SendArgs { conversation_id: p.conversation_id.clone(), content: Some(Value::String(prompt)), model, replace_from: None };
+            chat::run(st, db::new_id(), run, args, chat::Sink::background(|_| {})).await;
+            let _ = app.emit("inbox-changed", ());
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn proactive_get(state: State<'_, Arc<AppState>>) -> Res<inbox::Proactive> {
+    inbox::get(&state.db.lock().unwrap()).map_err(e)
+}
+
+#[tauri::command]
+fn proactive_set(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, config: inbox::Proactive) -> Res<()> {
+    inbox::set(&state.db.lock().unwrap(), &config).map_err(e)?;
+    let _ = app.emit("tasks-changed", ());
+    Ok(())
+}
+
 // ---------- self-maintenance (diagnostics, self-tests, self-repair)
 
 const UPDATE_FEED: &str = "https://github.com/niko4244/openclaude/releases/latest/download/latest.json";
@@ -1592,6 +1647,10 @@ pub fn run() {
             devices_info,
             provider_presets,
             report_error,
+            pending_list,
+            pending_decide,
+            proactive_get,
+            proactive_set,
             diagnostics,
             clear_errors,
             self_test,

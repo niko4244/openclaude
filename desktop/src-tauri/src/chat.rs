@@ -522,6 +522,19 @@ async fn execute_tool(state: &Arc<AppState>, run: &Run, cid: &str, call: &ToolCa
     let chat_key = (cid.to_string(), call.name.clone());
     // Screen control is never permanently pre-approved: at most for the current chat.
     let always = (policy.as_deref() == Some("allow") && !is_computer) || state.chat_allows.lock().unwrap().contains(&chat_key);
+    if !always && !ch.interactive && !is_computer && !is_browser {
+        // Background run: queue the call for the user instead of failing (approvals inbox).
+        let model = state.db.lock().unwrap().get_conversation(cid).ok().flatten().and_then(|c| c.model);
+        let queued = state.db.lock().unwrap().add_pending(cid, &server, &tool, &args, model.as_deref());
+        return match queued {
+            Ok(id) => ToolOutcome::Done(
+                format!("Queued for the user's approval in OpenClaude's approvals inbox (request {id}); it has not run yet. Do not call it again. Continue without its result and say that it is waiting for approval."),
+                false,
+                None,
+            ),
+            Err(e) => ToolOutcome::Done(format!("Could not queue this call for approval: {e}"), true, None),
+        };
+    }
     if !always && !ch.interactive {
         return ToolOutcome::Done(
             "This tool needs approval, which is not possible in a background task. Set it to \"Always allow\" in Settings to use it in tasks.".into(),

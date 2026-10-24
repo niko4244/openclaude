@@ -82,6 +82,14 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Gate: desktop 38/38, a11y 0, plugins 11/11.
 - **Neutral palette:** sidebar, main and divider are pixel-identical to the reference in light and dark (VISUAL_BASELINES §1c). The accent, logo and fonts stay ours by mission rule. a11y 0 in both themes.
 - **iPhone / live device test:** skipped at Nik's request (2026-10-24). The phone was only on Bluetooth. Android device tools stay verified by unit tests against a stub adb (matrix row 25: Partial). Revisit only if Nik connects an Android device or enables Windows Hypervisor Platform for the emulator.
+- **Session 2026-10-24 (after the v0.2.0 release):**
+  - Providers (row 27), self-maintenance (row 28), Duet-style proactive assistant and approvals inbox (row 29), and the repo secret scan (clean).
+  - Parallel sessions, each in its own worktree and branch, to be merged after review:
+    - `record-skill`: Record a skill (Claude Cowork, July 2026).
+    - `prompt-library`: prompt library with GitHub collections.
+    - `code-extras`: web device emulation, SSH remote coding, original pixel mascot.
+  - Shared E2E lock: `mkdir "$TEMP/oc-e2e.lock"` before any app launch, `rmdir` after. The app is single-instance.
+  - Gateway outage since about 00:57 on 2026-10-24: LiteLLM's local routes (qwen-local, gemma4-local) return "Connection error". Ollama restarted (v0.40.8) and the container can't reach it, though 127.0.0.1:11434 works. Model E2E steps use the direct Ollama provider meanwhile. Fixing it is Nik's call (firewall or Ollama binding).
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 

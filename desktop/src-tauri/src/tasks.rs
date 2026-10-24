@@ -146,7 +146,9 @@ pub async fn run_task(state: Arc<AppState>, app: AppHandle, task: Task) -> anyho
     });
     let run = Arc::new(Run { cancel: tokio::sync::Notify::new() });
     let args = SendArgs { conversation_id: conv.id.clone(), content: Some(serde_json::Value::String(task.prompt.clone())), model: task.model.clone(), replace_from: None };
+    let waiting_before = state.db.lock().unwrap().count_pending();
     crate::chat::run(state.clone(), new_id(), run, args, sink).await;
+    let waiting = state.db.lock().unwrap().count_pending() - waiting_before;
     let (err, answered) = outcome.lock().unwrap().clone();
     let status = match (err, answered) {
         (Some(e), _) => format!("error: {}", e.chars().take(200).collect::<String>()),
@@ -161,8 +163,12 @@ pub async fn run_task(state: Arc<AppState>, app: AppHandle, task: Task) -> anyho
         let _ = app
             .notification()
             .builder()
-            .title(format!("Task {}: {}", if status == "ok" { "finished" } else { "needs attention" }, task.title))
-            .body(if status == "ok" { "Open OpenClaude to see the result.".to_string() } else { status.clone() })
+            .title(format!("Task {}: {}", if status == "ok" && waiting == 0 { "finished" } else { "needs attention" }, task.title))
+            .body(match (status.as_str(), waiting) {
+                (_, w) if w > 0 => format!("{w} action(s) wait for your approval in Tasks."),
+                ("ok", _) => "Open OpenClaude to see the result.".to_string(),
+                _ => status.clone(),
+            })
             .show();
     }
     Ok(conv.id)
