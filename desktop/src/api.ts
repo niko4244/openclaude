@@ -312,6 +312,8 @@ export type DeviceInventory = {
   devices: { serial: string; state: string; model: string | null; emulator: boolean }[];
   avds: string[];
   images: string[];
+  /** Windows Hypervisor Platform (the Android Emulator needs it); null when unknown. */
+  hypervisor: boolean | null;
 };
 export type ProviderPreset = { id: string; name: string; base_url: string; needs_key: boolean };
 export type ProviderConfig = { id: string; name: string; base_url: string; preset: string | null; enabled: boolean };

@@ -104,17 +104,43 @@ pub struct Inventory {
     pub devices: Vec<Device>,
     pub avds: Vec<String>,
     pub images: Vec<String>,
+    /// Windows Hypervisor Platform, which the Android Emulator needs on Windows (None = unknown).
+    pub hypervisor: Option<bool>,
+}
+
+/// Win32_OptionalFeature InstallState: 1 enabled, 2 disabled, 3 absent.
+fn parse_install_state(out: &str) -> Option<bool> {
+    match out.trim() {
+        "1" => Some(true),
+        "2" | "3" => Some(false),
+        _ => None,
+    }
+}
+
+/// Read-only check (no elevation, nothing changed).
+#[cfg(windows)]
+async fn hypervisor_platform() -> Option<bool> {
+    let ps = Path::new(&std::env::var_os("SystemRoot")?).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let q = "(Get-CimInstance Win32_OptionalFeature -Filter \"Name='HypervisorPlatform'\").InstallState";
+    let out = run(&ps, &["-NoProfile", "-NonInteractive", "-Command", q], Duration::from_secs(20)).await.ok()?;
+    parse_install_state(&String::from_utf8_lossy(&out))
+}
+
+#[cfg(not(windows))]
+async fn hypervisor_platform() -> Option<bool> {
+    None
 }
 
 pub async fn inventory() -> Inventory {
-    let Some(sdk) = locate() else { return Inventory::default() };
+    let hypervisor = hypervisor_platform().await;
+    let Some(sdk) = locate() else { return Inventory { hypervisor, ..Default::default() } };
     let devices = run(&sdk.adb, &["devices", "-l"], Duration::from_secs(15)).await.map(|o| parse_devices(&String::from_utf8_lossy(&o))).unwrap_or_default();
     let avds = match &sdk.emulator {
         Some(e) => run(e, &["-list-avds"], Duration::from_secs(15)).await.map(|o| String::from_utf8_lossy(&o).lines().map(str::trim).filter(|l| valid(l, "._-")).map(str::to_string).collect()).unwrap_or_default(),
         None => vec![],
     };
     let images = sdk.root.as_deref().map(system_images).unwrap_or_default();
-    Inventory { sdk: Some(sdk), devices, avds, images }
+    Inventory { sdk: Some(sdk), devices, avds, images, hypervisor }
 }
 
 /// Starts an emulator; it keeps running after the app exits, like one started from Android Studio.
@@ -285,6 +311,14 @@ pub async fn execute(sdk: &Sdk, name: &str, args: &Value) -> Result<Output> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hypervisor_install_state() {
+        assert_eq!(parse_install_state("1\r\n"), Some(true));
+        assert_eq!(parse_install_state("2"), Some(false));
+        assert_eq!(parse_install_state("3"), Some(false));
+        assert_eq!(parse_install_state(""), None);
+    }
 
     #[test]
     fn parses_adb_devices() {
