@@ -76,6 +76,15 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
   - Approval-gated `device__*` tools, treated like computer use.
   - Unit tests use a stub adb. There's no live E2E: this machine has `~/tools/adb` but no Emulator, system image or device. Installing the Android Emulator is a multi-GB download, so ask Nik first.
   - The Office add-in bridge and the BLE buddy are not reproducible. Microsoft 365 connectors are available through the directory.
+- **Settings dialog (`fbcfe1e6`):**
+  - Settings is now a modal over the page you came from (`underPage`/`view` in App.tsx), with a grouped icon nav, filter, close × (`aria-label="Close settings"`, the E2E selector), switches and a segmented theme control.
+  - Pages are full width.
+  - Gate: desktop 38/38, a11y 0, plugins 11/11.
+- **iPhone (Nik asked to test devices with his iPhone, 2026-10-24):**
+  - The phone is paired over Bluetooth only; there's no USB VID_05AC device. Apple Mobile Device Service is installed but stopped.
+  - Nik needs to connect a data cable, unlock the phone, tap "Trust", and start the service (opening iTunes/iMazing does that).
+  - From Windows an iPhone supports detection, info and screenshots (pymobiledevice3; iOS 17+ needs Developer Mode plus an admin tunnel). Taps and typing need WebDriverAgent built on a Mac, so they're not possible from Windows.
+  - adb/Android tools don't apply to an iPhone.
 - **Environment note:** E2E chat checks time out when two large local models fight for VRAM (qwen-local 11 GB at 262k context, gemma4 10 GB, plus an external `C:\llama.cppin\llama-server.exe` holding about 4.7 GB that something restarts). Unload one (`ollama stop <model>`) and re-run.
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
