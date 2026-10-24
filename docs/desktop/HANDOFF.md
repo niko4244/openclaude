@@ -42,7 +42,11 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - `npm` lock: `desktop/package-lock.json` is force-tracked (the root .gitignore ignores lockfiles).
 
 ## State at last checkpoint
-- **Release:** `desktop-v0.1.0` published; the updater feed serves it.
+- **Release:** `desktop-v0.2.0` published 2026-10-24 (approved by Nik) at https://github.com/niko4244/openclaude/releases/tag/desktop-v0.2.0, tagged at `db86d09f`.
+  - The feed `releases/latest/download/latest.json` serves 0.2.0.
+  - The installer's signature verifies against the embedded pubkey (scratch check with Python `cryptography`; a tampered copy fails).
+  - Installed v0.1.0 apps update to it. On first launch, 0.2.0 seeds Ponytail and imports Nik's Claude plugins.
+  - There's no installed copy on the dev machine to watch the update live.
 - **Plugin system shipped:** commit `fca5dac4` (matrix row 26, tranche T10). Code is in `src-tauri/src/plugins.rs`.
   - Install from GitHub: marketplace.json or a plugin repo. Sparse shallow clones go to `<data>/plugins/repos/`.
   - Auto-update every 15 min. Rollback pins the plugin.
@@ -76,7 +80,7 @@ node e2e/perf.e2e.mjs               # baseline: cold ~0.65 s, idle ~397 MB
 - **Visual reference:** a passive screenshot found no visible Claude window on any of the 3 monitors (minimized). Pixel baselines still need a reference image from Nik in `docs/parity/reference/`.
 
 ## Next steps (in order)
-1. Ask Nik before publishing `desktop-v0.2.0` (bump the version in tauri.conf.json/package.json/Cargo.toml, then `scripts/release.ps1 -Publish`). The installed v0.1.0 then auto-updates, and the first launch seeds Ponytail and imports his Claude plugins.
+1. Next releases: bump the version in package.json, package-lock.json (root entries), tauri.conf.json, Cargo.toml and Cargo.lock, then commit, push, and run `scripts/release.ps1 -Publish`. Publishing is outward-facing: ask Nik first.
 2. Visual: compare against reference screenshots once Nik drops them into `docs/parity/reference/`.
 3. Remaining gaps:
    - Artifact in-panel editing.
