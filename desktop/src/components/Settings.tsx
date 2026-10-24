@@ -4,14 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
-import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type ProviderPreset, type ProviderView, type Project, type ServerConfig, type ServerStatus } from "../api";
+import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type ProviderPreset, type ProviderView, type ErrorGroup, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
-import { Blocks, Cloud, Cpu, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
+import { Blocks, Cloud, Cpu, Stethoscope, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
 
-type Tab = "general" | "gateway" | "providers" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "about";
+type Tab = "general" | "gateway" | "providers" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "diagnostics" | "about";
 const GROUPS: [string, [Tab, string, LucideIcon][]][] = [
-  ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["providers", "Providers", Cloud], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["about", "About", Info]]],
+  ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["providers", "Providers", Cloud], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["diagnostics", "Diagnostics", Stethoscope], ["about", "About", Info]]],
   ["Customize", [["connectors", "Connectors (MCP)", Blocks], ["plugins", "Plugins", Plug], ["extensions", "Extensions", Package]]],
 ];
 
@@ -33,9 +33,11 @@ export function Settings({
   toast,
   onProfileChanged,
   onClose,
+  onFixInCode,
 }: {
   onProfileChanged: () => void;
   onClose: () => void;
+  onFixInCode: (cwd: string, prompt: string) => void;
   initialTab?: string;
   models: ModelEntry[];
   onModelsChanged: () => Promise<void>;
@@ -80,6 +82,7 @@ export function Settings({
         {tab === "plugins" && <PluginsTab toast={toast} />}
         {tab === "extensions" && <Extensions toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
+        {tab === "diagnostics" && <DiagnosticsTab toast={toast} onFixInCode={onFixInCode} />}
         {tab === "about" && <About />}
         </div>
       </div>
@@ -142,6 +145,7 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
         <span className="help">Starts minimized to the tray so scheduled tasks can run.</span>
       </div>
       <SttField toast={toast} />
+      <AutoUpdateField />
       <SyncField toast={toast} />
       <DevicesField toast={toast} />
       <ComputerUseField />
@@ -929,6 +933,60 @@ function ProvidersTab({ toast, onModelsChanged }: { toast: (m: string) => void; 
         <button className="btn primary" disabled={busy || !form.id || !form.base_url} onClick={() => void save()}>{busy ? "Saving…" : "Save provider"}</button>
         {form.id && <button className="btn" onClick={() => { setForm(blank); setKey(""); }}>Clear</button>}
       </div>
+    </>
+  );
+}
+
+function AutoUpdateField() {
+  const [on, setOn] = useState(true);
+  useEffect(() => { void api.getSetting("auto_update").then((v) => setOn(v !== "false")); }, []);
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={on} onChange={async (e) => { setOn(e.target.checked); await api.setSetting("auto_update", e.target.checked ? "true" : "false"); }} /> Update automatically</label>
+      <span className="help">Checks for a new signed release shortly after start and every 4 hours, downloads it in the background, then offers a restart. Installed plugins update on their own either way.</span>
+    </div>
+  );
+}
+
+function DiagnosticsTab({ toast, onFixInCode }: { toast: (m: string) => void; onFixInCode: (cwd: string, prompt: string) => void }) {
+  const [d, setD] = useState<{ groups: ErrorGroup[]; source_repo: string | null; version: string } | null>(null);
+  const [checks, setChecks] = useState<{ name: string; ok: boolean; detail: string }[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => void api.diagnostics().then(setD);
+  useEffect(load, []);
+  return (
+    <>
+      <p className="muted">OpenClaude keeps a local log of its own errors (secrets redacted; nothing is sent anywhere). Hand an error to the coding agent to patch OpenClaude's source on a new branch, or file it on GitHub. New releases arrive through the updater.</p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="btn primary" disabled={busy} onClick={async () => { setBusy(true); try { setChecks(await api.selfTest()); } finally { setBusy(false); } }}>{busy ? "Checking…" : "Run self-test"}</button>
+        <button className="btn" onClick={async () => { await api.clearErrors(); load(); toast("Error log cleared"); }}>Clear log</button>
+      </div>
+      {checks && (
+        <div className="card" style={{ marginTop: 10 }}>
+          {checks.map((c) => <div key={c.name} className="offer-row"><span className={`dot ${c.ok ? "ok" : "err"}`} style={{ marginTop: 6 }} /><span style={{ flex: 1 }}><strong>{c.name}</strong> <span className="muted">· {c.detail}</span></span></div>)}
+        </div>
+      )}
+      <div className="field">
+        <label>Source folder (for self-repair)</label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="mono" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{d?.source_repo ?? "Not set"}</span>
+          <button className="btn" onClick={async () => { try { if (await api.diagPickRepo()) load(); } catch (e) { toast(String(e)); } }}>Choose…</button>
+        </div>
+        <span className="help">A checkout of OpenClaude's repository. Detected automatically when running a source build.</span>
+      </div>
+      <h2 className="section-h">Errors {d ? `(${d.groups.length})` : ""}</h2>
+      {d?.groups.length === 0 && <div className="muted">No errors recorded.</div>}
+      {d?.groups.map((g) => (
+        <div className="card" key={g.fingerprint}>
+          <div className="card-head"><span className="badge">{g.kind}</span><span className="name" style={{ flex: 1 }}>{g.message}</span><span className="badge">{g.count}×</span></div>
+          <div className="muted" style={{ fontSize: 12 }}>last {new Date(g.last_at).toLocaleString()}</div>
+          {g.detail && <pre className="mono context-preview" style={{ marginTop: 6 }}>{g.detail}</pre>}
+          <div className="plugin-actions">
+            <button className="btn primary" onClick={async () => { try { const [cwd, prompt] = await api.diagFix(g.fingerprint); onFixInCode(cwd, prompt); } catch (e) { toast(String(e)); } }}>Fix with the coding agent</button>
+            <button className="btn" onClick={() => void api.diagReport(g.fingerprint).catch((e) => toast(String(e)))}>Report on GitHub</button>
+          </div>
+        </div>
+      ))}
     </>
   );
 }

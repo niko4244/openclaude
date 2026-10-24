@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { BookOpen, ChevronDown, Code2, Coffee, Download, Lightbulb, PenLine, Pin, PinOff, Pencil, Trash2 } from "lucide-react";
 import { api, textOf, type Attachment, type Conversation, type GatewayStatus, type Message, type ModelEntry, type Project } from "./api";
@@ -45,6 +47,8 @@ export default function App() {
   const [page, setPage] = useState<Page>("chat");
   // The page shown under the Settings dialog.
   const [underPage, setUnderPage] = useState<Page>("chat");
+  const [codeSeed, setCodeSeed] = useState<{ key: string; cwd: string; prompt: string } | null>(null);
+  const [readyUpdate, setReadyUpdate] = useState<Update | null>(null);
   const view: Page = page === "settings" ? underPage : page;
   const [settingsTab, setSettingsTab] = useState<string | undefined>();
   const [collapsed, setCollapsed] = useState(false);
@@ -186,6 +190,28 @@ export default function App() {
   }, []);
 
   // ---- native menu + quick entry hand-off (refs so the listeners see fresh state)
+  // Self-maintenance: report uncaught UI errors to the local diagnostics log.
+  useEffect(() => {
+    const onErr = (e: ErrorEvent) => void api.reportError(String(e.message || e.error), String(e.error?.stack || `${e.filename}:${e.lineno}`)).catch(() => {});
+    const onRej = (e: PromiseRejectionEvent) => void api.reportError(String(e.reason?.message || e.reason), String(e.reason?.stack || "")).catch(() => {});
+    window.addEventListener("error", onErr);
+    window.addEventListener("unhandledrejection", onRej);
+    return () => { window.removeEventListener("error", onErr); window.removeEventListener("unhandledrejection", onRej); };
+  }, []);
+  // Keep itself current: check shortly after start and every 4 hours, download in the background, offer a restart.
+  useEffect(() => {
+    let stop = false;
+    const run = async () => {
+      if ((await api.getSetting("auto_update").catch(() => null)) === "false") return;
+      try {
+        const u = await checkUpdate();
+        if (u && !stop) { await u.download(); if (!stop) setReadyUpdate(u); }
+      } catch { /* offline or no release: try again later */ }
+    };
+    const first = setTimeout(run, 20000);
+    const every = setInterval(run, 4 * 3600 * 1000);
+    return () => { stop = true; clearTimeout(first); clearInterval(every); };
+  }, []);
   const menuRef = useRef<(id: string) => void>(() => {});
   const quickRef = useRef<(p: { text: string; model: string | null }) => void>(() => {});
   useEffect(() => {
@@ -368,7 +394,7 @@ export default function App() {
           </div>
         )}
         {view === "code" ? (
-          <CodeView models={modelsView} favorites={favorites} onToggleFavorite={toggleFavorite} defaultModel={model} />
+          <CodeView models={modelsView} favorites={favorites} onToggleFavorite={toggleFavorite} defaultModel={model} seed={codeSeed} />
         ) : view === "tasks" ? (
           <TasksPage models={models} defaultModel={model} onOpenChat={(id) => { void refreshConvs(); openChat(id); }} toast={toast} />
         ) : view === "chats" ? (
@@ -466,6 +492,13 @@ export default function App() {
           onAsk={(t) => void send(t, [])}
         />
       )}
+      {readyUpdate && (
+        <div className="update-banner" role="status">
+          OpenClaude {readyUpdate.version} is ready.
+          <button className="btn primary" onClick={async () => { await readyUpdate.install(); await relaunch(); }}>Restart to update</button>
+          <button className="icon-btn" aria-label="Later" onClick={() => setReadyUpdate(null)}>✕</button>
+        </div>
+      )}
       {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
     </div>
     {page === "settings" && (
@@ -480,6 +513,7 @@ export default function App() {
         onProjectsChanged={async () => setProjects(await api.listProjects())}
         onProfileChanged={loadProfile}
         onClose={() => go(underPage)}
+        onFixInCode={(cwd, prompt) => { setCodeSeed({ key: `${Date.now()}`, cwd, prompt }); go("code"); }}
         toast={toast}
       />
     )}

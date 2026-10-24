@@ -16,18 +16,16 @@ pub struct Preset {
     pub name: &'static str,
     pub base_url: &'static str,
     pub needs_key: bool,
-    #[serde(skip)]
-    pub anthropic: bool,
 }
 
 const fn p(id: &'static str, name: &'static str, base_url: &'static str, needs_key: bool) -> Preset {
-    Preset { id, name, base_url, needs_key, anthropic: false }
+    Preset { id, name, base_url, needs_key }
 }
 
 /// OpenAI-compatible endpoints of the common providers.
 pub const PRESETS: &[Preset] = &[
     p("openai", "OpenAI", "https://api.openai.com/v1", true),
-    Preset { id: "anthropic", name: "Anthropic", base_url: "https://api.anthropic.com/v1", needs_key: true, anthropic: true },
+    p("anthropic", "Anthropic", "https://api.anthropic.com/v1", true),
     p("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", true),
     p("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", true),
     p("groq", "Groq", "https://api.groq.com/openai/v1", true),

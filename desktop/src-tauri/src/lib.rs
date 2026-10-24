@@ -9,6 +9,7 @@ mod providers;
 mod plugins;
 mod voice;
 mod db;
+mod diag;
 mod devices;
 mod extensions;
 mod gateway;
@@ -137,7 +138,7 @@ fn set_setting(state: State<'_, Arc<AppState>>, key: String, value: String) -> R
 fn check_ui_setting(key: &str, value: &str) -> Res<()> {
     const UI_KEYS: &[&str] = &[
         "theme", "system_prompt", "tools_enabled", "quick_entry_shortcut", "close_to_tray", "default_model", "favorite_models",
-        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled", "android_devices_enabled",
+        "mcp_disabled", "extended_thinking", "user_name", "stt_model", "computer_use_enabled", "browser_tools_enabled", "android_devices_enabled", "auto_update",
     ];
     if key.starts_with("feedback:") {
         return if matches!(value, "up" | "down" | "none") { Ok(()) } else { Err("invalid feedback".into()) };
@@ -807,6 +808,104 @@ async fn git_diff(state: State<'_, Arc<AppState>>, cwd: String, path: Option<Str
     agent::git_diff(&dir, path.as_deref()).await.map_err(e)
 }
 
+// ---------- self-maintenance (diagnostics, self-tests, self-repair)
+
+const UPDATE_FEED: &str = "https://github.com/niko4244/openclaude/releases/latest/download/latest.json";
+const ISSUE_REPO: &str = "niko4244/openclaude";
+
+#[tauri::command]
+fn report_error(message: String, detail: String) {
+    diag::record("frontend", &message, &detail);
+}
+
+#[derive(Serialize)]
+struct Diagnostics {
+    groups: Vec<diag::Group>,
+    source_repo: Option<String>,
+    version: String,
+}
+
+#[tauri::command]
+fn diagnostics(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Diagnostics {
+    let repo = state.db.lock().unwrap().get_setting("self_repo").map(std::path::PathBuf::from).filter(|p| p.join(".git").exists()).or_else(diag::source_repo);
+    Diagnostics { groups: diag::groups(), source_repo: repo.map(|p| p.to_string_lossy().to_string()), version: app.package_info().version.to_string() }
+}
+
+#[tauri::command]
+fn clear_errors() {
+    diag::clear();
+}
+
+/// Health checks across the app's moving parts.
+#[tauri::command]
+async fn self_test(state: State<'_, Arc<AppState>>) -> Res<Vec<diag::Check>> {
+    let mut out = vec![];
+    let gw = state.gateway.read().await.clone();
+    let st = gw.status().await;
+    out.push(diag::check("Gateway", st.reachable && st.authenticated, st.error.unwrap_or_else(|| format!("{} ({} ms)", st.base_url, st.latency_ms.unwrap_or(0)))));
+    let list = providers::load(&state.db.lock().unwrap());
+    for v in providers::catalog(&list).await.1.into_iter().filter(|v| v.provider.enabled) {
+        out.push(diag::check(&format!("Provider {}", v.provider.name), v.models > 0, if v.models > 0 { format!("{} models", v.models) } else { v.status.and_then(|s| s.error).unwrap_or_else(|| "no models".into()) }));
+    }
+    let servers = state.mcp.statuses().await;
+    let broken: Vec<String> = servers.iter().filter(|s| s.state == "error").map(|s| format!("{}: {}", s.name, s.error.clone().unwrap_or_default())).collect();
+    out.push(diag::check("Connectors", broken.is_empty(), if broken.is_empty() { format!("{} configured, none failing", servers.len()) } else { broken.join("; ") }));
+    let plugin_errors: Vec<String> = state.plugins.registry().plugins.into_iter().filter_map(|p| p.error.map(|e| format!("{}: {e}", p.name))).collect();
+    out.push(diag::check("Plugins", plugin_errors.is_empty(), if plugin_errors.is_empty() { format!("{} installed, no errors", state.plugins.registry().plugins.len()) } else { plugin_errors.join("; ") }));
+    let feed = reqwest::Client::new().get(UPDATE_FEED).timeout(std::time::Duration::from_secs(15)).send().await;
+    out.push(match feed {
+        Ok(r) if r.status().is_success() => {
+            let v: Value = r.json().await.unwrap_or(Value::Null);
+            diag::check("Update feed", v["version"].is_string(), format!("latest {}", v["version"].as_str().unwrap_or("?")))
+        }
+        Ok(r) => diag::check("Update feed", false, format!("HTTP {}", r.status())),
+        Err(err) => diag::check("Update feed", false, err.to_string()),
+    });
+    let groups = diag::groups();
+    let day = db::now_ms() - 86_400_000;
+    let recent: usize = groups.iter().filter(|g| g.last_at > day).map(|g| g.count).sum();
+    out.push(diag::check("Errors (24 h)", recent == 0, if recent == 0 { "none".to_string() } else { format!("{recent} in {} group(s)", groups.iter().filter(|g| g.last_at > day).count()) }));
+    Ok(out)
+}
+
+/// The coding-agent prompt for a group, and the repo to run it in (granted as a workspace on this click).
+#[tauri::command]
+fn diag_fix(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, fingerprint: String) -> Res<(String, String)> {
+    let g = diag::groups().into_iter().find(|g| g.fingerprint == fingerprint).ok_or("That error is no longer in the log")?;
+    let repo = diagnostics(app.clone(), state.clone()).source_repo.ok_or("Choose OpenClaude's source folder first (Diagnostics → Source folder)")?;
+    let mut ws = granted_workspaces(&state);
+    if !ws.contains(&repo) {
+        ws.push(repo.clone());
+        state.db.lock().unwrap().set_setting("workspaces", &serde_json::to_string(&ws).map_err(e)?).map_err(e)?;
+    }
+    Ok((repo, diag::fix_prompt(&g, &app.package_info().version.to_string())))
+}
+
+#[tauri::command]
+fn diag_report(app: tauri::AppHandle, fingerprint: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let g = diag::groups().into_iter().find(|g| g.fingerprint == fingerprint).ok_or("That error is no longer in the log")?;
+    app.opener().open_url(diag::issue_url(ISSUE_REPO, &g, &app.package_info().version.to_string()), None::<&str>).map_err(e)
+}
+
+/// Picks OpenClaude's source checkout (for self-repair) with the native folder picker.
+#[tauri::command]
+async fn diag_pick_repo(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |f| {
+        let _ = tx.send(f);
+    });
+    let Ok(Some(dir)) = rx.await else { return Ok(None) };
+    let path = dir.into_path().map_err(e)?;
+    if !path.join(".git").exists() || !path.join("desktop").join("src-tauri").is_dir() {
+        return Err("That folder is not an OpenClaude checkout (expected .git and desktop/src-tauri)".into());
+    }
+    let p = path.to_string_lossy().to_string();
+    state.db.lock().unwrap().set_setting("self_repo", &p).map_err(e)?;
+    Ok(Some(p))
+}
+
 // ---------- model providers (any OpenAI-compatible endpoint)
 
 #[tauri::command]
@@ -1337,6 +1436,7 @@ pub fn run() {
                 None => app.path().app_data_dir()?,
             };
             std::fs::create_dir_all(&data_dir)?;
+            diag::init(&data_dir);
             let db = Db::open(&data_dir.join("openclaude.db"))?;
             let base_url = std::env::var("OPENCLAUDE_GATEWAY_URL")
                 .ok()
@@ -1491,6 +1591,13 @@ pub fn run() {
             sync_status,
             devices_info,
             provider_presets,
+            report_error,
+            diagnostics,
+            clear_errors,
+            self_test,
+            diag_fix,
+            diag_report,
+            diag_pick_repo,
             providers_list,
             provider_save,
             provider_remove,

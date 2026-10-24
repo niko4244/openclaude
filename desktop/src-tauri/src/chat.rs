@@ -195,6 +195,7 @@ pub async fn run(state: Arc<AppState>, run_id: String, run: Arc<Run>, args: Send
     let result = run_inner(&state, &run, &args, &ch).await;
     let cancelled = matches!(result, Ok(true));
     if let Err(e) = result {
+        crate::diag::record("chat", &e.to_string(), &format!("model {}", args.model));
         let _ = ch.send(ChatEvent::Error { message: e.to_string() });
     }
     state.runs.lock().unwrap().remove(&run_id);

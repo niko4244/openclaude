@@ -41,7 +41,7 @@ function blockText(c: unknown): string {
   return JSON.stringify(c);
 }
 
-export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: { models: ModelEntry[]; favorites: string[]; onToggleFavorite: (id: string) => void; defaultModel: string | null }) {
+export function CodeView({ models, favorites, onToggleFavorite, defaultModel, seed }: { models: ModelEntry[]; favorites: string[]; onToggleFavorite: (id: string) => void; defaultModel: string | null; seed?: { key: string; cwd: string; prompt: string } | null }) {
   const [cwd, setCwd] = useState<string | null>(null);
   const [git, setGit] = useState<GitStatus | null>(null);
   const [diff, setDiff] = useState<{ path: string | null; text: string } | null>(null);
@@ -51,6 +51,12 @@ export function CodeView({ models, favorites, onToggleFavorite, defaultModel }: 
   const [busy, setBusy] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState("");
+  useEffect(() => {
+    if (!seed) return;
+    setCwd(seed.cwd);
+    setDiff(null);
+    setInput(seed.prompt);
+  }, [seed?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   const [err, setErr] = useState<string | null>(null);
   const [termOpen, setTermOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
