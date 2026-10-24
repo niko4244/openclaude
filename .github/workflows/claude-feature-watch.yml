@@ -1,0 +1,97 @@
+name: Claude feature watch
+
+# The repository-level half of the OpenClaude Evolution Engine. It runs whether
+# or not the desktop app (or the developer's machine) is on, and it only does
+# discovery: fetch official sources, fold them into the durable registry, and
+# open a reviewable PR with the result. It never installs or runs third-party
+# code, never calls a model, and never writes to the default branch.
+
+on:
+  schedule:
+    # Every six hours, off the hour to avoid the busy period.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-feature-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # This job pushes the registry branch, so the checkout keeps the token in
+      # git's local config for the run. Permissions are scoped to this job above.
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Check official sources
+        id: check
+        continue-on-error: true
+        run: node desktop/feature-intel/cli.mjs check --quiet
+
+      - name: Refresh the parity report
+        if: steps.check.outcome == 'success'
+        run: node desktop/feature-intel/cli.mjs report-parity
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: feature-intel-report
+          path: |
+            docs/feature-intel/reports/
+            desktop/feature-intel/registry.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Open or update the registry pull request
+        if: steps.check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: evolution/registry
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            desktop/feature-intel/registry.json \
+            desktop/feature-intel/state \
+            docs/feature-intel/reports \
+            docs/feature-parity.md
+          if git diff --cached --quiet; then
+            echo "No registry changes."
+            exit 0
+          fi
+          git checkout -B "$BRANCH"
+          git commit -m "chore(feature-intel): update the Claude feature registry"
+          git push --force-with-lease origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --head "$BRANCH" --base main \
+              --title "Feature intelligence: registry update" \
+              --body "Automated registry update from the Evolution Engine.
+
+          - Source: official release notes, GitHub releases, npm, and the MCP specifications.
+          - Nothing here is an instruction: source text is quoted as data and needs triage.
+          - Review the new signals in \`docs/feature-intel/reports/latest.md\`, then classify the relevant ones with \`node desktop/feature-intel/cli.mjs classify <signal-id>\`.
+
+          Merging this PR only records evidence. It does not implement or deploy anything."
+          fi
+
+      - name: Fail when every source failed
+        if: steps.check.outcome != 'success'
+        run: |
+          echo "The sweep failed. Inspect docs/feature-intel/reports/latest.md in the artifact."
+          exit 1

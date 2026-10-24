@@ -1,0 +1,40 @@
+{
+  "checked": "2026-10-24T14:29:33.274Z",
+  "digest": "85362e5865e515b1",
+  "etag": null,
+  "lastModified": null,
+  "items": [
+    "v2.4.0: 2.4.0",
+    "1.32.2: 1.32.2",
+    "@modelcontextprotocol/server@2.4.0: @modelcontextprotocol/server@2.4.0",
+    "@modelcontextprotocol/server-legacy@2.4.0: @modelcontextprotocol/server-legacy@2.4.0",
+    "@modelcontextprotocol/node@2.1.2: @modelcontextprotocol/node@2.1.2",
+    "@modelcontextprotocol/core@2.4.0: @modelcontextprotocol/core@2.4.0",
+    "@modelcontextprotocol/codemod@2.4.0: @modelcontextprotocol/codemod@2.4.0",
+    "@modelcontextprotocol/client@2.4.0: @modelcontextprotocol/client@2.4.0",
+    "v2.3.1: 2.3.1",
+    "1.32.1: 1.32.1",
+    "@modelcontextprotocol/server@2.3.1: @modelcontextprotocol/server@2.3.1",
+    "@modelcontextprotocol/server-legacy@2.3.1: @modelcontextprotocol/server-legacy@2.3.1",
+    "@modelcontextprotocol/core@2.3.1: @modelcontextprotocol/core@2.3.1",
+    "@modelcontextprotocol/codemod@2.3.1: @modelcontextprotocol/codemod@2.3.1",
+    "@modelcontextprotocol/client@2.3.1: @modelcontextprotocol/client@2.3.1"
+  ],
+  "keys": [
+    "v2.4.0",
+    "1.32.2",
+    "@modelcontextprotocol/server@2.4.0",
+    "@modelcontextprotocol/server-legacy@2.4.0",
+    "@modelcontextprotocol/node@2.1.2",
+    "@modelcontextprotocol/core@2.4.0",
+    "@modelcontextprotocol/codemod@2.4.0",
+    "@modelcontextprotocol/client@2.4.0",
+    "v2.3.1",
+    "1.32.1",
+    "@modelcontextprotocol/server@2.3.1",
+    "@modelcontextprotocol/server-legacy@2.3.1",
+    "@modelcontextprotocol/core@2.3.1",
+    "@modelcontextprotocol/codemod@2.3.1",
+    "@modelcontextprotocol/client@2.3.1"
+  ]
+}

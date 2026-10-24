@@ -1,0 +1,12 @@
+{
+  "sources": [
+    { "id": "claude-desktop-local", "title": "Claude Desktop builds installed locally", "kind": "local_claude_versions", "path": "%LOCALAPPDATA%\\AnthropicClaude", "category": "claude-desktop" },
+    { "id": "mcp-spec-releases", "title": "MCP specification releases", "kind": "github_releases", "repo": "modelcontextprotocol/modelcontextprotocol", "category": "mcp" },
+    { "id": "mcp-ts-sdk-releases", "title": "MCP TypeScript SDK releases", "kind": "github_releases", "repo": "modelcontextprotocol/typescript-sdk", "category": "mcp" },
+    { "id": "mcp-sdk-npm", "title": "@modelcontextprotocol/sdk on npm", "kind": "npm_latest", "package": "@modelcontextprotocol/sdk", "category": "mcp" },
+    { "id": "mcpb-releases", "title": "MCP Bundles (desktop extensions) tooling", "kind": "github_releases", "repo": "modelcontextprotocol/mcpb", "category": "extensions" },
+    { "id": "claude-code-releases", "title": "Claude Code releases (coding-workspace reference)", "kind": "github_releases", "repo": "anthropics/claude-code", "category": "coding" },
+    { "id": "litellm-releases", "title": "LiteLLM releases (gateway compatibility)", "kind": "github_releases", "repo": "BerriAI/litellm", "category": "gateway" },
+    { "id": "claude-release-notes", "title": "Claude apps release notes", "kind": "page_lines", "url": "https://docs.anthropic.com/en/release-notes/claude-apps", "match": "desktop|windows|mac|mcp|extension|artifact|project|connector|voice|computer|cowork|code", "category": "claude-desktop" }
+  ]
+}
