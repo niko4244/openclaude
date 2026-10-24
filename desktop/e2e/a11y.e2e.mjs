@@ -152,7 +152,7 @@ try {
       await sleep(400);
       await scan(page, `settings:${tab}`);
     }
-    await page.click('button:has-text("Done")').catch(() => page.keyboard.press("Escape"));
+    await page.click('[aria-label="Close settings"]').catch(() => page.keyboard.press("Escape"));
     await sleep(300);
   });
 
@@ -219,7 +219,7 @@ try {
     await page.keyboard.press("Control+,");
     await sleep(500);
     await scan(page, "settings:General", "dark");
-    await page.click('button:has-text("Done")').catch(() => page.keyboard.press("Escape"));
+    await page.click('[aria-label="Close settings"]').catch(() => page.keyboard.press("Escape"));
     await page.evaluate(() => delete document.documentElement.dataset.theme);
   });
 } catch (e) {

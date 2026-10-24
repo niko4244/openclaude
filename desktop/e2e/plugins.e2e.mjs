@@ -84,7 +84,7 @@ try {
   await ui.click('button:has-text("Check for updates")');
   const t = await ui.locator(".toast").last().innerText({ timeout: 300000 });
   record("update check runs across GitHub plugins", /up to date|Updated/.test(t), t);
-  await ui.click('button:has-text("Done")');
+  await ui.click('[aria-label="Close settings"]');
 
   // 5. "/" menu: pick Ponytail's skill and send a coding request with it
   await ui.waitForFunction(() => !/No models|Select a model/.test(document.querySelector(".composer .picker-btn")?.textContent || ""), null, { timeout: 30000 });

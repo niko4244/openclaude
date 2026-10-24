@@ -7,17 +7,12 @@ import { disable as disableAutostart, enable as enableAutostart, isEnabled as au
 import { api, type RegistryEntry, type ExtensionPreview, type ProbeReport, type GatewayStatus, type ImportCandidate, type ModelEntry, type PluginCandidate, type PluginOffer, type PluginView, type SyncStatus, type DeviceInventory, type Project, type ServerConfig, type ServerStatus } from "../api";
 import { fmtTokens } from "./ModelPicker";
 import { copyText } from "./Markdown";
+import { Blocks, Cpu, Folder, Info, Monitor, Moon, Network, Package, Plug, Search, Settings2, Sun, X, type LucideIcon } from "lucide-react";
 
 type Tab = "general" | "gateway" | "models" | "connectors" | "plugins" | "extensions" | "projects" | "about";
-const TABS: [Tab, string][] = [
-  ["general", "General"],
-  ["gateway", "Gateway"],
-  ["models", "Models"],
-  ["connectors", "Connectors (MCP)"],
-  ["plugins", "Plugins"],
-  ["extensions", "Extensions"],
-  ["projects", "Projects"],
-  ["about", "About"],
+const GROUPS: [string, [Tab, string, LucideIcon][]][] = [
+  ["Settings", [["general", "General", Settings2], ["gateway", "Gateway", Network], ["models", "Models", Cpu], ["projects", "Projects", Folder], ["about", "About", Info]]],
+  ["Customize", [["connectors", "Connectors (MCP)", Blocks], ["plugins", "Plugins", Plug], ["extensions", "Extensions", Package]]],
 ];
 
 function Unk({ v }: { v: string | number | boolean | null | undefined }) {
@@ -52,17 +47,30 @@ export function Settings({
   toast: (m: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || "general");
+  const [filter, setFilter] = useState("");
   useEffect(() => { if (initialTab) setTab(initialTab as Tab); }, [initialTab]);
+  const q = filter.trim().toLowerCase();
   return (
-    <div className="settings">
-      <div className="settings-inner">
-        <div className="page-head"><h1>Settings</h1><span className="spacer" /><button className="btn" onClick={onClose}>Done</button></div>
-        <div className="settings-layout">
-        <div className="settings-tabs" role="tablist" aria-orientation="vertical">
-          {TABS.map(([t, l]) => (
-            <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{l}</button>
-          ))}
-        </div>
+    <div className="settings-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="settings settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <nav className="settings-nav">
+          <h1 id="settings-title" className="sr-only">Settings</h1>
+          <label className="settings-search"><Search size={15} /><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search" aria-label="Search settings" /></label>
+          <div className="settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings sections">
+            {GROUPS.map(([group, items]) => {
+              const shown = items.filter(([, l]) => !q || l.toLowerCase().includes(q));
+              return shown.length > 0 && (
+                <div key={group} role="none">
+                  <div className="settings-group" aria-hidden="true">{group}</div>
+                  {shown.map(([t, l, Icon]) => (
+                    <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}><Icon size={16} strokeWidth={1.75} />{l}</button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </nav>
+        <button className="icon-btn settings-close" onClick={onClose} aria-label="Close settings" title="Close (Esc)"><X size={18} /></button>
         <div className="settings-body">
         {tab === "general" && <General theme={theme} onTheme={onTheme} toast={toast} onProfileChanged={onProfileChanged} />}
         {tab === "gateway" && <Gateway onChanged={onGatewayChanged} toast={toast} />}
@@ -72,7 +80,6 @@ export function Settings({
         {tab === "extensions" && <Extensions toast={toast} />}
         {tab === "projects" && <Projects projects={projects} models={models} onChanged={onProjectsChanged} toast={toast} />}
         {tab === "about" && <About />}
-        </div>
         </div>
       </div>
     </div>
@@ -104,12 +111,14 @@ function General({ theme, onTheme, toast, onProfileChanged }: { theme: string; o
         </div>
       </div>
       <div className="field">
-        <label htmlFor="theme">Appearance</label>
-        <select id="theme" value={theme} onChange={(e) => onTheme(e.target.value)}>
-          <option value="system">Match system</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
+        <div className="setting-row">
+          <span className="label" id="theme-label">Theme</span>
+          <div className="segmented" role="radiogroup" aria-labelledby="theme-label">
+            {([["system", "Match system", Monitor], ["light", "Light", Sun], ["dark", "Dark", Moon]] as const).map(([v, l, Icon]) => (
+              <button key={v} role="radio" aria-checked={theme === v} aria-label={l} title={l} className={theme === v ? "on" : ""} onClick={() => onTheme(v)}><Icon size={16} strokeWidth={1.75} /></button>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="field">
         <label htmlFor="sys">Custom instructions (all chats)</label>

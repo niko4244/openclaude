@@ -52,6 +52,8 @@ column was compared by tokens (§1b), not pixels.
 | Footer rows | 32 px, 8 px inset | Account row (avatar, name, gateway status) | Content differs by design (gateway status instead of account plan) |
 | Main background vs sidebar | sidebar ≈ #fafaf9, main ≈ #fcfcfb (light) | Own palette, same relationship (sidebar a step darker than main) | Palette intentionally original |
 | Chat title | Centered in the title row | Centered in the title row | Matches |
+| Settings | Centered modal (about 1024x768, 16 px inset) over the dimmed app; left nav with search and groups (Settings / Customize) and icons; close x; label-left / control-right rows with hairlines; switches; theme as a 3-icon segmented control | Same structure: modal over the page you came from, grouped icon nav with filter, close x, hairline rows, switches, segmented theme control | Our sections differ (gateway, models, plugins instead of account/billing) |
+| Pages (Tasks etc.) | Full content width, 40 px padding, serif title about 26 px at y≈72, actions right | Full width, 40 px padding, 26 px serif title at y≈76, actions right | Matches |
 
 ## 2. Landmarks to baseline (per screen)
 1. Shell: title row, window controls region, sidebar (collapsed/expanded), main content, composer.

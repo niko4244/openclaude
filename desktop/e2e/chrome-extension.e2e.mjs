@@ -49,7 +49,7 @@ try {
   record("extension pairs with the app", linked);
 
   // 3. the model reads the active tab through the extension, approvals in chat
-  await ui.click('button:has-text("Done")');
+  await ui.click('[aria-label="Close settings"]');
   await ui.keyboard.press("Control+n");
   await ui.fill(".composer textarea", "Use the chrome__read tool to read my active Chrome tab and tell me the tab marker.");
   await ui.keyboard.press("Enter");

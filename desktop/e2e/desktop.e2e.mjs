@@ -178,7 +178,7 @@ try {
     dirDetail = (await page.locator(".card").filter({ has: page.locator(".dot") }).last().innerText()).replace(/\s+/g, " ").slice(0, 110);
   }
   record("connector directory adds a registry server", dirOk, dirDetail);
-  await page.click('button:has-text("Done")');
+  await page.click('[aria-label="Close settings"]');
 
   // 4. tool call with approval
   await page.keyboard.press("Control+n");
@@ -419,7 +419,7 @@ try {
   await p2.keyboard.press("Control+,");
   await p2.click('button[role="tab"]:has-text("General")');
   await p2.locator('label:has-text("Browser tools") input[type="checkbox"]').check();
-  await p2.click('button:has-text("Done")');
+  await p2.click('[aria-label="Close settings"]');
   await p2.keyboard.press("Control+n");
   await sendMessage(p2, `Use the browser tools: navigate to ${pageUrl} then read the page and tell me the magic marker.`);
   // Approve every browser step for this chat while the run is busy (slow models can take minutes).

@@ -21,7 +21,7 @@ try {
   await ui.waitForSelector(".sidebar");
   await ui.keyboard.press("Control+,");
   await ui.locator('label:has-text("Computer use (experimental)") input').check();
-  await ui.click('button:has-text("Done")');
+  await ui.click('[aria-label="Close settings"]');
   // pick the vision model
   await ui.waitForFunction(() => !/No models|Select a model/.test(document.querySelector(".composer .picker-btn")?.textContent || ""), null, { timeout: 30000 });
   await ui.click(".composer .picker-btn");

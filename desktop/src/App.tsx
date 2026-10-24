@@ -43,6 +43,9 @@ function initialsOf(name: string) {
 
 export default function App() {
   const [page, setPage] = useState<Page>("chat");
+  // The page shown under the Settings dialog.
+  const [underPage, setUnderPage] = useState<Page>("chat");
+  const view: Page = page === "settings" ? underPage : page;
   const [settingsTab, setSettingsTab] = useState<string | undefined>();
   const [collapsed, setCollapsed] = useState(false);
   const [convs, setConvs] = useState<Conversation[]>([]);
@@ -142,6 +145,7 @@ export default function App() {
 
   const go = useCallback((p: Page, tab?: string) => {
     setPage(p);
+    if (p !== "settings") setUnderPage(p);
     setSettingsTab(tab);
     setFindOpen(false);
     if (p !== "chat") setArtifact(null);
@@ -215,12 +219,12 @@ export default function App() {
       else if (mod && e.key === "-") { e.preventDefault(); void invoke("menu_action", { id: "zoom_out" }); }
       else if (mod && e.key === "0") { e.preventDefault(); void invoke("menu_action", { id: "zoom_reset" }); }
       else if (e.key === "Escape" && (findOpen || sheetOpen || titleMenu)) { setFindOpen(false); setSheetOpen(false); setTitleMenu(false); }
+      else if (e.key === "Escape" && page === "settings") go(underPage);
       else if (e.key === "Escape" && activeId && chat.busy) { e.preventDefault(); void chat.stop(activeId); }
-      else if (e.key === "Escape" && page === "settings") go("chat");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newChat, activeId, chat, page, findOpen, sheetOpen, titleMenu, go]);
+  }, [newChat, activeId, chat, page, underPage, findOpen, sheetOpen, titleMenu, go]);
 
   const chooseModel = async (id: string) => {
     setModel(id);
@@ -310,14 +314,14 @@ export default function App() {
     <div className="shell">
     <WindowControls />
     {/* While a dialog is open the page behind it is inert (not focusable, hidden from assistive tech). */}
-    <div className="app" inert={searchOpen || sheetOpen || undefined} aria-hidden={searchOpen || sheetOpen || undefined}>
+    <div className="app" inert={searchOpen || sheetOpen || page === "settings" || undefined} aria-hidden={searchOpen || sheetOpen || page === "settings" || undefined}>
       <Sidebar
         collapsed={collapsed}
         conversations={convs}
         projects={projects}
         activeId={activeId}
         activeProject={activeProject}
-        page={page}
+        page={view}
         status={status}
         profile={{ name: userName, initials }}
         onNew={newChat}
@@ -332,10 +336,10 @@ export default function App() {
         onSearch={() => setSearchOpen(true)}
       />
       <main className="main">
-        {page === "chat" && activeId && <h1 className="sr-only">{active?.title || "Chat"}</h1>}
-        {page === "code" && <h1 className="sr-only">Code workspace</h1>}
-        {!(page === "chat" && activeId) && page !== "code" && <div className="main-top" data-tauri-drag-region="deep" />}
-        {page === "chat" && activeId && (
+        {view === "chat" && activeId && <h1 className="sr-only">{active?.title || "Chat"}</h1>}
+        {view === "code" && <h1 className="sr-only">Code workspace</h1>}
+        {!(view === "chat" && activeId) && view !== "code" && <div className="main-top" data-tauri-drag-region="deep" />}
+        {view === "chat" && activeId && (
           <div className="topbar chat-top" data-tauri-drag-region="deep">
             <span className="spacer" />
             <div className="picker">
@@ -363,27 +367,13 @@ export default function App() {
             {gatewayDown && <button className="btn danger" onClick={() => go("settings", "gateway")}>Gateway {status!.reachable ? "auth failed" : "offline"}</button>}
           </div>
         )}
-        {page === "settings" ? (
-          <Settings
-            initialTab={settingsTab}
-            models={models}
-            onModelsChanged={async () => { await loadModels(true); await loadProbes(); }}
-            onGatewayChanged={async () => { await checkGateway(); const ms = await loadModels(true); if (!model && ms[0]) setModel(ms[0].id); }}
-            theme={theme}
-            onTheme={async (t) => { setTheme(t); await api.setSetting("theme", t); }}
-            projects={projects}
-            onProjectsChanged={async () => setProjects(await api.listProjects())}
-            onProfileChanged={loadProfile}
-            onClose={() => go("chat")}
-            toast={toast}
-          />
-        ) : page === "code" ? (
+        {view === "code" ? (
           <CodeView models={modelsView} favorites={favorites} onToggleFavorite={toggleFavorite} defaultModel={model} />
-        ) : page === "tasks" ? (
+        ) : view === "tasks" ? (
           <TasksPage models={models} defaultModel={model} onOpenChat={(id) => { void refreshConvs(); openChat(id); }} toast={toast} />
-        ) : page === "chats" ? (
+        ) : view === "chats" ? (
           <ChatsPage onOpen={openChat} onNew={newChat} />
-        ) : page === "projects" ? (
+        ) : view === "projects" ? (
           <ProjectsPage projects={projects} onOpen={(id) => { setActiveProject(id); setActiveId(null); go("chat"); }} onCreate={() => go("settings", "projects")} />
         ) : !activeId ? (
           <div className="home">
@@ -467,7 +457,7 @@ export default function App() {
         )}
       </main>
 
-      {artifact && page === "chat" && (
+      {artifact && view === "chat" && (
         <ArtifactPanel
           artifact={versionsOf(artifact.title).find((v) => v.code === artifact.code) ?? artifact}
           versions={versionsOf(artifact.title)}
@@ -478,6 +468,21 @@ export default function App() {
       )}
       {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
     </div>
+    {page === "settings" && (
+      <Settings
+        initialTab={settingsTab}
+        models={models}
+        onModelsChanged={async () => { await loadModels(true); await loadProbes(); }}
+        onGatewayChanged={async () => { await checkGateway(); const ms = await loadModels(true); if (!model && ms[0]) setModel(ms[0].id); }}
+        theme={theme}
+        onTheme={async (t) => { setTheme(t); await api.setSetting("theme", t); }}
+        projects={projects}
+        onProjectsChanged={async () => setProjects(await api.listProjects())}
+        onProfileChanged={loadProfile}
+        onClose={() => go(underPage)}
+        toast={toast}
+      />
+    )}
     {searchOpen && <SearchPalette onOpen={openChat} onClose={() => setSearchOpen(false)} />}
     {sheetOpen && <ShortcutsSheet onClose={() => setSheetOpen(false)} />}
     </div>
