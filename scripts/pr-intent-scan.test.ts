@@ -195,4 +195,40 @@ describe('getGitDiff', () => {
       rmSync(repo, { recursive: true, force: true })
     }
   })
+
+  test('returns a diff larger than the default spawnSync buffer without truncating it', () => {
+    // spawnSync's default maxBuffer is 1 MiB. A 2 MB pull-request diff (like #1) hit
+    // ENOBUFS, which surfaced as "git diff failed" plus a megabyte of diff text.
+    const repo = mkdtempSync(join(tmpdir(), 'openclaude-pr-intent-scan-large-'))
+    const originalCwd = process.cwd()
+
+    try {
+      git(repo, ['init', '-q', '-b', 'main'])
+      git(repo, ['config', 'user.email', 'test@example.com'])
+      git(repo, ['config', 'user.name', 'Test User'])
+
+      writeFileSync(join(repo, 'seed.txt'), 'seed\n')
+      git(repo, ['add', 'seed.txt'])
+      git(repo, ['commit', '-q', '-m', 'base'])
+      const base = git(repo, ['rev-parse', 'HEAD'])
+
+      const padding = Array.from(
+        { length: 50_000 },
+        (_, index) => `line ${index} padding padding`,
+      ).join('\n')
+      writeFileSync(join(repo, 'large.txt'), `${padding}\nEND-OF-LARGE-DIFF\n`)
+      git(repo, ['add', 'large.txt'])
+      git(repo, ['commit', '-q', '-m', 'large change'])
+      const head = git(repo, ['rev-parse', 'HEAD'])
+
+      process.chdir(repo)
+      const diff = getGitDiff(base, head)
+
+      expect(diff.length).toBeGreaterThan(1024 * 1024)
+      expect(diff).toContain('END-OF-LARGE-DIFF')
+    } finally {
+      process.chdir(originalCwd)
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
 })

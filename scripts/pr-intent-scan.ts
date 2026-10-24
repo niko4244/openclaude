@@ -24,6 +24,13 @@ type CliOptions = {
   failOn: FindingSeverity
 }
 
+// Node's default is 1 MiB, which this PR's 2 MB diff exceeds: spawnSync then returns
+// status null with ENOBUFS and a truncated stdout, which used to be reported as
+// "git diff failed" followed by a megabyte of diff. Keep a real ceiling, but one a
+// normal large pull request fits in.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024
+const GIT_ERROR_TEXT_LIMIT = 2000
+
 const SELF_EXCLUDED_FILES = new Set([
   'scripts/pr-intent-scan.ts',
   'scripts/pr-intent-scan.test.ts',
@@ -377,14 +384,23 @@ export function scanAddedLines(lines: DiffLine[]): Finding[] {
   return uniqueFindings(findings)
 }
 
+function gitErrorText(stderr: string | Buffer | null | undefined): string {
+  const text = String(stderr ?? '').trim()
+  if (!text) return 'no stderr'
+  return text.length > GIT_ERROR_TEXT_LIMIT
+    ? `${text.slice(0, GIT_ERROR_TEXT_LIMIT)}… (truncated)`
+    : text
+}
+
 export function getGitDiff(baseRef: string, headRef = 'HEAD'): string {
   const mergeBase = spawnSync('git', ['merge-base', baseRef, headRef], {
     encoding: 'utf8',
+    maxBuffer: GIT_MAX_BUFFER,
   })
 
-  if (mergeBase.status !== 0) {
+  if (mergeBase.error || mergeBase.status !== 0) {
     throw new Error(
-      `Could not determine merge-base between ${baseRef} and ${headRef}: ${mergeBase.stderr.trim() || mergeBase.stdout.trim()}`,
+      `Could not determine merge-base between ${baseRef} and ${headRef}: ${mergeBase.error?.message ?? gitErrorText(mergeBase.stderr)}`,
     )
   }
 
@@ -392,11 +408,16 @@ export function getGitDiff(baseRef: string, headRef = 'HEAD'): string {
   const diff = spawnSync(
     'git',
     ['diff', '--unified=0', '--no-ext-diff', `${base}...${headRef}`],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER },
   )
 
+  // An ENOBUFS/SIGTERM has status null and little or no stderr; the error message is
+  // the only useful part, and stdout must not be echoed (it can be megabytes).
+  if (diff.error) {
+    throw new Error(`git diff failed: ${diff.error.message}`)
+  }
   if (diff.status !== 0) {
-    throw new Error(`git diff failed: ${diff.stderr.trim() || diff.stdout.trim()}`)
+    throw new Error(`git diff failed (exit ${diff.status}): ${gitErrorText(diff.stderr)}`)
   }
 
   return diff.stdout
