@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  checkOutcome,
   parseReport,
   renderComment,
   renderFailure,
@@ -130,6 +131,34 @@ describe('parseReport', () => {
     expect(parseReport('not json')).toBeNull()
     expect(parseReport('null')).toBeNull()
     expect(parseReport('{"findings":"nope"}')).toBeNull()
+  })
+})
+
+describe('checkOutcome', () => {
+  test('passes only once a report is published', () => {
+    const outcome = checkOutcome(
+      {
+        baseRef: 'aaaaaaaa',
+        headRef: 'bbbbbbbb',
+        addedLines: 10,
+        findings: [finding(), finding({ severity: 'medium' }), finding({ severity: 'medium' })],
+      },
+      '',
+    )
+
+    expect(outcome).toEqual({
+      conclusion: 'success',
+      title: '1 high, 2 medium',
+      summary: expect.stringContaining('3 total'),
+    })
+  })
+
+  test('fails when the scan produced no report', () => {
+    const outcome = checkOutcome(null, 'report is empty')
+
+    expect(outcome.conclusion).toBe('failure')
+    expect(outcome.title).toBe('Scan did not complete')
+    expect(outcome.summary).toContain('report is empty')
   })
 })
 

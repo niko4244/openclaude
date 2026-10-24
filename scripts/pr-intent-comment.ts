@@ -21,6 +21,7 @@ type CliOptions = {
   reportPath: string
   pullRequest: string
   repo: string
+  headSha: string
 }
 
 const MARKER = '<!-- pr-intent-scan -->'
@@ -32,6 +33,13 @@ const MAX_FILE_CHARS = 300
 const MAX_DETAIL_CHARS = 300
 const MAX_EXCERPT_CHARS = 500
 const MAX_REF_CHARS = 100
+const CHECK_NAME = 'PR intent scan findings'
+
+export type CheckOutcome = {
+  conclusion: 'success' | 'failure'
+  title: string
+  summary: string
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -199,34 +207,111 @@ function existingCommentId(repo: string, pullRequest: string): string | null {
   return first ? first.trim() : null
 }
 
-function publish(repo: string, pullRequest: string, body: string): 'created' | 'updated' {
+function publish(
+  repo: string,
+  pullRequest: string,
+  body: string,
+): { action: 'created' | 'updated'; url: string } {
   const commentId = existingCommentId(repo, pullRequest)
   const payload = JSON.stringify({ body })
+  const response = commentId
+    ? gh(
+        [
+          'api',
+          '-X',
+          'PATCH',
+          `repos/${repo}/issues/comments/${commentId}`,
+          '--input',
+          '-',
+        ],
+        payload,
+      )
+    : gh(
+        ['api', '-X', 'POST', `repos/${repo}/issues/${pullRequest}/comments`, '--input', '-'],
+        payload,
+      )
 
-  if (commentId) {
-    gh(
-      [
-        'api',
-        '-X',
-        'PATCH',
-        `repos/${repo}/issues/comments/${commentId}`,
-        '--input',
-        '-',
-      ],
-      payload,
-    )
-    return 'updated'
+  const url = (JSON.parse(response) as { html_url?: string }).html_url ?? ''
+  return { action: commentId ? 'updated' : 'created', url }
+}
+
+// Re-read the comment before the check is allowed to pass, so a green check
+// means the findings are actually on the pull request.
+function verifyPublished(repo: string, pullRequest: string): void {
+  const commentId = existingCommentId(repo, pullRequest)
+  if (!commentId) {
+    throw new Error('published comment could not be found')
   }
 
+  const body = gh(['api', `repos/${repo}/issues/comments/${commentId}`, '-q', '.body'])
+  if (!body.startsWith(MARKER)) {
+    throw new Error('published comment does not carry the scan marker')
+  }
+}
+
+export function checkOutcome(
+  report: ScanReport | null,
+  reason: string,
+): CheckOutcome {
+  if (!report) {
+    return {
+      conclusion: 'failure',
+      title: 'Scan did not complete',
+      summary: `No findings were published: ${reason}`,
+    }
+  }
+
+  const high = report.findings.filter(finding => finding.severity === 'high').length
+  const medium = report.findings.filter(finding => finding.severity === 'medium').length
+  return {
+    conclusion: 'success',
+    title: `${high} high, ${medium} medium`,
+    summary: `The scan findings are published in the pull request comment (${report.findings.length} total).`,
+  }
+}
+
+function startCheck(repo: string, headSha: string): string | null {
+  try {
+    const response = gh(
+      ['api', '-X', 'POST', `repos/${repo}/check-runs`, '--input', '-'],
+      JSON.stringify({
+        name: CHECK_NAME,
+        head_sha: headSha,
+        status: 'in_progress',
+        output: {
+          title: 'Publishing findings',
+          summary: 'Waiting for the findings comment to be published on the pull request.',
+        },
+      }),
+    )
+    const id = (JSON.parse(response) as { id?: number }).id
+    return typeof id === 'number' ? String(id) : null
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`PR intent check: could not start the check run (${message})\n`)
+    return null
+  }
+}
+
+function completeCheck(
+  repo: string,
+  checkId: string,
+  outcome: CheckOutcome,
+  detailsUrl: string,
+): void {
   gh(
-    ['api', '-X', 'POST', `repos/${repo}/issues/${pullRequest}/comments`, '--input', '-'],
-    payload,
+    ['api', '-X', 'PATCH', `repos/${repo}/check-runs/${checkId}`, '--input', '-'],
+    JSON.stringify({
+      status: 'completed',
+      conclusion: outcome.conclusion,
+      details_url: detailsUrl || undefined,
+      output: { title: outcome.title, summary: outcome.summary },
+    }),
   )
-  return 'created'
 }
 
 function parseOptions(argv: string[]): CliOptions {
-  const options: CliOptions = { reportPath: '', pullRequest: '', repo: '' }
+  const options: CliOptions = { reportPath: '', pullRequest: '', repo: '', headSha: '' }
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
@@ -242,6 +327,9 @@ function parseOptions(argv: string[]): CliOptions {
     } else if (arg === '--repo') {
       options.repo = value
       index++
+    } else if (arg === '--head-sha') {
+      options.headSha = value
+      index++
     }
   }
 
@@ -253,21 +341,40 @@ export function run(options: CliOptions): void {
     throw new Error('--report, --pr and --repo are required')
   }
 
+  const checkId = options.headSha ? startCheck(options.repo, options.headSha) : null
   const { report, reason } = readReport(options.reportPath)
   const body = report ? renderComment(report) : renderFailure(reason)
+  const outcome = checkOutcome(report, reason)
 
   if (report) {
-    const high = report.findings.filter(finding => finding.severity === 'high').length
-    const medium = report.findings.filter(finding => finding.severity === 'medium').length
     process.stdout.write(
-      `PR intent comment: ${report.findings.length} finding(s) (${high} high, ${medium} medium)\n`,
+      `PR intent comment: ${report.findings.length} finding(s) (${outcome.title})\n`,
     )
   } else {
     process.stdout.write(`PR intent comment: scan report unavailable (${reason})\n`)
   }
 
-  const action = publish(options.repo, options.pullRequest, body)
-  process.stdout.write(`PR intent comment ${action} on ${options.repo}#${options.pullRequest}\n`)
+  try {
+    const { action, url } = publish(options.repo, options.pullRequest, body)
+    verifyPublished(options.repo, options.pullRequest)
+    process.stdout.write(
+      `PR intent comment ${action} on ${options.repo}#${options.pullRequest}\n`,
+    )
+
+    if (checkId) {
+      completeCheck(options.repo, checkId, outcome, url)
+      process.stdout.write(`PR intent check completed: ${outcome.conclusion}\n`)
+    }
+  } catch (error) {
+    if (checkId) {
+      completeCheck(options.repo, checkId, {
+        conclusion: 'failure',
+        title: 'Findings were not published',
+        summary: error instanceof Error ? error.message : String(error),
+      }, '')
+    }
+    throw error
+  }
 }
 
 if (import.meta.main) {
