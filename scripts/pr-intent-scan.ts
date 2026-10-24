@@ -34,6 +34,8 @@ const GIT_ERROR_TEXT_LIMIT = 2000
 const SELF_EXCLUDED_FILES = new Set([
   'scripts/pr-intent-scan.ts',
   'scripts/pr-intent-scan.test.ts',
+  'scripts/pr-intent-comment.ts',
+  'scripts/pr-intent-comment.test.ts',
 ])
 
 const SHORTENER_DOMAINS = [

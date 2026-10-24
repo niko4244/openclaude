@@ -233,6 +233,12 @@ describe('scanAddedLines', () => {
       line('const pattern = /https:\\/\\/dropbox\\.com\\//', {
         file: 'scripts/pr-intent-scan.ts',
       }),
+      line("detail: 'Added encoded PowerShell invocation',", {
+        file: 'scripts/pr-intent-comment.test.ts',
+      }),
+      line("code: 'powershell-encoded',", {
+        file: 'scripts/pr-intent-comment.ts',
+      }),
     ])
 
     expect(findings).toHaveLength(0)
