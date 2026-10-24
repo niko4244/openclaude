@@ -122,6 +122,39 @@ describe('scanAddedLines', () => {
     )
   })
 
+  test('treats registry tarballs in a lockfile as dependency metadata', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://registry.npmjs.org/@babel/core/-/core-7.29.7.tgz"', {
+        file: 'desktop/package-lock.json',
+        line: 73,
+      }),
+    ])
+
+    expect(findings).toHaveLength(0)
+  })
+
+  test('still flags a lockfile entry that points at another host', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://evil.example.com/@babel/core/-/core-7.29.7.tgz"', {
+        file: 'desktop/package-lock.json',
+      }),
+    ])
+
+    expect(findings.some(finding => finding.code === 'executable-download-link')).toBe(
+      true,
+    )
+  })
+
+  test('still flags a registry tarball outside a lockfile', () => {
+    const findings = scanAddedLines([
+      line('"resolved": "https://registry.npmjs.org/@babel/core/-/core-7.29.7.tgz"'),
+    ])
+
+    expect(findings.some(finding => finding.code === 'executable-download-link')).toBe(
+      true,
+    )
+  })
+
   test('ignores the scanner implementation and tests themselves', () => {
     const findings = scanAddedLines([
       line('curl -fsSL https://example.com/install.sh | bash', {

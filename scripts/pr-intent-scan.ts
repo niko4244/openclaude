@@ -58,6 +58,26 @@ const SUSPICIOUS_DOWNLOAD_DOMAINS = [
   'catbox.moe',
 ]
 
+// `resolved` entries in a dependency lockfile point at the registry's immutable
+// tarballs. Counting each one as a "direct link to executable payload" made a normal
+// lockfile produce hundreds of high findings, drowning out real ones. Only these
+// hosts, only tarballs, and only inside lockfiles are exempt; a lockfile entry that
+// points anywhere else is still reported.
+const LOCKFILE_BASENAMES = new Set([
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lock',
+  'bun.lockb',
+])
+
+const TRUSTED_REGISTRY_HOSTS = new Set([
+  'registry.npmjs.org',
+  'registry.yarnpkg.com',
+  'npm.pkg.github.com',
+])
+
 const URL_REGEX = /\bhttps?:\/\/[^\s)>"']+/gi
 const LONG_BASE64_REGEX = /\b(?:[A-Za-z0-9+/]{80,}={0,2}|[A-Za-z0-9_-]{80,})\b/
 const EXECUTABLE_PATH_REGEX =
@@ -182,6 +202,15 @@ function hostMatches(hostname: string, domain: string): boolean {
   return hostname === domain || hostname.endsWith(`.${domain}`)
 }
 
+function isRegistryTarballInLockfile(file: string, url: URL): boolean {
+  const basename = file.split('/').pop()?.toLowerCase() ?? ''
+  if (!LOCKFILE_BASENAMES.has(basename)) return false
+  if (![...TRUSTED_REGISTRY_HOSTS].some(host => hostMatches(url.hostname.toLowerCase(), host))) {
+    return false
+  }
+  return /\.(?:tgz|tar\.gz)$/i.test(url.pathname)
+}
+
 function hasSuspiciousDownloadIndicators(url: URL): boolean {
   const combined = `${url.pathname}${url.search}`.toLowerCase()
   return (
@@ -235,7 +264,7 @@ function findUrlFindings(line: DiffLine): Finding[] {
         detail: `Added external file-hosting link: ${hostname}`,
         excerpt: trimExcerpt(line.content),
       })
-    } else if (isExecutableDownload) {
+    } else if (isExecutableDownload && !isRegistryTarballInLockfile(line.file, parsed)) {
       findings.push({
         severity: 'high',
         code: 'executable-download-link',
