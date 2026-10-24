@@ -72,6 +72,9 @@ jobs:
   pr-intent-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -101,10 +104,30 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Suspicious PR intent scan
+        id: scan
+        continue-on-error: true
         env:
           PR_SCAN_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'origin/main' }}
           PR_SCAN_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
-        run: bun run security:pr-scan -- --base "$PR_SCAN_BASE" --head "$PR_SCAN_HEAD"
+        run: bun run security:pr-scan -- --base "$PR_SCAN_BASE" --head "$PR_SCAN_HEAD" --json > "$RUNNER_TEMP/pr-intent-scan.json"
+
+      # Forks get a read-only token, so only same-repository PRs get a comment.
+      - name: Comment findings on the pull request
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bun scripts/pr-intent-comment.ts
+          --report "$RUNNER_TEMP/pr-intent-scan.json"
+          --pr "${{ github.event.pull_request.number }}"
+          --repo "${{ github.repository }}"
+
+      - name: Fail when the scan does not pass
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: |
+          echo "::error::PR intent scan did not pass (high-severity findings or a scan error); see the step log and the pull request comment."
+          exit 1
 
   unit-tests:
     needs: changes
